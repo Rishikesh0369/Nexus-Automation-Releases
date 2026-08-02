@@ -6,8 +6,9 @@ const { chromium } = require('playwright');
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  console.log('Navigating to BPCL portal...');
-  await page.goto('https://ebharatgas.com/'); // BPCL login URL
+  console.log('Navigating to BPCL eConnect portal...');
+  // Updated URL to BPCL eConnect Portal
+  await page.goto('https://econnect.bpcl.in'); 
 
   console.log('Please log in manually in the opened browser window.');
   console.log('Once logged in and on the dashboard, press ENTER in this terminal to save the session.');
