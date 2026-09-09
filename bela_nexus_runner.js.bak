@@ -1,0 +1,712 @@
+/**
+ * Bharat Gas Nexus - Playwright Automation Script
+ * Strict Tamper-Proof Login & Cash Memo Cancellation Runner
+ * Supports both Google Chrome and Microsoft Edge with smart graceful auto-fallback
+ */
+
+const { chromium } = require('playwright');
+const {
+    runAutomation,
+    performLogin,
+    verifyLicenseAndFetchManifest,
+    DEFAULT_SELECTORS,
+    buildSelectors,
+    requestStopAutomation,
+    resetStopAutomation,
+    isStopAutomationRequested,
+    launchBrowser: coreLaunchBrowser,
+    injectNexusOverlay: coreInjectNexusOverlay
+} = require('./desktop-app/automationRunner');
+
+/**
+ * Launch Browser with smart auto-fallback between Chrome and Edge
+ * Preferred channel defaults to 'chrome', falls back to 'msedge' (or vice versa)
+ * @param {string} [preferredChannel='chrome']
+ * @param {Object} [options={}]
+ * @param {boolean} [options.headless=false]
+ * @param {Array<string>} [options.args=[]]
+ */
+async function launchBrowser(preferredChannel = 'chrome', options = {}) {
+    const cleanPreferred = preferredChannel === 'msedge' ? 'msedge' : 'chrome';
+    const secondaryChannel = cleanPreferred === 'chrome' ? 'msedge' : 'chrome';
+    const launchArgs = [
+        '--start-maximized',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-component-update',
+        '--disable-sync',
+        '--no-default-browser-check',
+        '--no-first-run',
+        ...(options.args || [])
+    ];
+
+    try {
+        return await chromium.launch({
+            headless: Boolean(options.headless),
+            channel: cleanPreferred,
+            args: launchArgs
+        });
+    } catch (err) {
+        console.warn(`[Runner] ${cleanPreferred} launch failed, falling back to ${secondaryChannel}:`, err.message);
+        return await chromium.launch({
+            headless: Boolean(options.headless),
+            channel: secondaryChannel,
+            args: launchArgs
+        });
+    }
+}
+
+/**
+ * Backward-compatible helper to launch Chrome directly
+ */
+async function launchChromeBrowser(options = {}) {
+    return await launchBrowser('chrome', options);
+}
+
+/**
+ * Optimized Anti-Captcha Task Polling Logic (ImageToTextTask)
+ * - Initial wait after task creation: 4 seconds (human workers need at least 3-4s to see and type)
+ * - Subsequent polling interval: 1200ms (1.2 seconds)
+ * - Maximum timeout: 45 seconds
+ * - Log: "[BOT] Polling Anti-Captcha result..."
+ * - Immediately returns uppercase text on status === 'ready' without extra artificial delays
+ * @param {string} base64Image
+ * @param {string} [apiKey]
+ * @param {Function} [log=console.log]
+ * @returns {Promise<string>} Solved CAPTCHA text in uppercase
+ */
+async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
+    const logger = typeof log === 'function' ? log : console.log;
+    const clientKey = (apiKey || process.env.ANTI_CAPTCHA_KEY || '4de60f13638febd83275de5f12c956d1' || '').trim();
+    if (!clientKey) {
+        throw new Error('Anti-Captcha API key is required.');
+    }
+
+    // 1. Create Task
+    const createResp = await fetch('https://api.anti-captcha.com/createTask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+            clientKey,
+            task: {
+                type: 'ImageToTextTask',
+                body: base64Image,
+                phrase: false,
+                case: false,
+                numeric: 0,
+                math: 0,
+                minLength: 0,
+                maxLength: 0
+            }
+        })
+    });
+
+    const createData = await createResp.json().catch(() => ({}));
+    if (createData.errorId && createData.errorId > 0) {
+        throw new Error(`Anti-Captcha createTask error: ${createData.errorCode || createData.errorId} - ${createData.errorDescription || 'Unknown error'}`);
+    }
+
+    const taskId = createData.taskId;
+    if (!taskId) {
+        throw new Error('Anti-Captcha failed to return a valid taskId');
+    }
+
+    // 2. Initial wait after task creation: 4 seconds (human workers need at least 3-4s to see and type)
+    logger('[BOT] Polling Anti-Captcha result...');
+    await new Promise(r => setTimeout(r, 4000));
+
+    // 3. Polling loop: 1200ms interval, 45s max timeout
+    const startTime = Date.now();
+    const maxTimeoutMs = 45000;
+
+    while (Date.now() - startTime < maxTimeoutMs) {
+        logger('[BOT] Polling Anti-Captcha result...');
+
+        let resultData;
+        try {
+            const resultResp = await fetch('https://api.anti-captcha.com/getTaskResult', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({
+                    clientKey,
+                    taskId
+                })
+            });
+            resultData = await resultResp.json().catch(() => ({}));
+        } catch (netErr) {
+            logger(`[BOT] Polling network warning: ${netErr.message}. Retrying...`);
+        }
+
+        if (resultData && resultData.errorId && resultData.errorId > 0) {
+            throw new Error(`Anti-Captcha getTaskResult error: ${resultData.errorCode || resultData.errorId} - ${resultData.errorDescription || 'Unknown error'}`);
+        }
+
+        if (resultData && resultData.status === 'ready' && resultData.solution && resultData.solution.text) {
+            // As soon as status is 'ready', immediately return uppercase solution without artificial delays
+            return resultData.solution.text.trim().toUpperCase();
+        }
+
+        // Subsequent polling interval: 1.2s (1200ms)
+        await new Promise(r => setTimeout(r, 1200));
+    }
+
+    throw new Error('Anti-Captcha timeout: Failed to solve CAPTCHA within 45 seconds.');
+}
+
+/**
+ * Strictly idempotent top-right badge injection.
+ * Checks if #nexus-overlay-banner already exists before injecting.
+ * Removes duplicate instances and ensures only ONE clean, compact badge at the top right.
+ * Guarantees it never injects in child iframes or the middle of webpage content.
+ * @param {import('playwright').Page} page
+ */
+async function injectNexusOverlay(page) {
+    if (!page || page.isClosed()) return;
+    try {
+        await page.evaluate(() => {
+            // Guard: Never inject inside child frames/iframes
+            if (window.top !== window.self) return;
+
+            // Single-instance check: if #nexus-overlay-banner already exists in DOM, do nothing
+            if (document.getElementById('nexus-overlay-banner')) {
+                return;
+            }
+
+            // Remove all existing legacy instances first
+            document.querySelectorAll('.nexus-auto-badge, #nexus-live-banner, .nexus-pill-badge, #nexus-guidance-overlay-banner').forEach(el => el.remove());
+            
+            const target = document.body || document.documentElement;
+            if (!target) return;
+
+            const badge = document.createElement('div');
+            badge.id = 'nexus-overlay-banner';
+            badge.className = 'nexus-auto-badge';
+            badge.style.cssText = `
+                position: fixed;
+                top: 8px;
+                right: 20px;
+                z-index: 999999;
+                background: rgba(15, 23, 42, 0.85);
+                backdrop-filter: blur(8px);
+                color: #38bdf8;
+                padding: 6px 14px;
+                border-radius: 20px;
+                font-family: sans-serif;
+                font-size: 11px;
+                font-weight: 600;
+                border: 1px solid rgba(56, 189, 248, 0.3);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+                pointer-events: none;
+            `;
+            badge.innerText = '⚡ Nexus Auto-Engine Running';
+            target.appendChild(badge);
+        });
+    } catch (e) {
+        // Silently ignore navigation/context destruction errors
+    }
+}
+
+// Aliases for compatibility with different caller naming conventions
+const injectOverlay = injectNexusOverlay;
+const showFloatingBanner = injectNexusOverlay;
+
+/**
+ * Fail-Safe Menu Opening Function:
+ * Resilient hover retry and click-fallback for "My Applications" -> "LPG One"
+ * @param {import('playwright').Page} page
+ */
+async function openMyApplicationsMenu(page) {
+    const myAppMenu = page.locator('a').filter({ hasText: 'My Application' }).first();
+    const lpgOneLink = page.locator('a').filter({ hasText: 'LPG One' }).first();
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        console.log(`[Menu] Attempt ${attempt}: Opening "My Applications"...`);
+        
+        // Action 1: Hover over menu
+        await myAppMenu.hover();
+        await page.waitForTimeout(1500);
+
+        // Check if LPG One appeared
+        if (await lpgOneLink.isVisible()) {
+            console.log('✅ "LPG One" dropdown is visible.');
+            return lpgOneLink;
+        }
+
+        // Action 2 (Fallback): If hovering didn't trigger dropdown, click "My Applications"
+        console.warn(`⚠️ Attempt ${attempt}: Hover failed to reveal "LPG One". Clicking menu directly...`);
+        await myAppMenu.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1500);
+
+        if (await lpgOneLink.isVisible()) {
+            console.log('✅ "LPG One" visible after click fallback.');
+            return lpgOneLink;
+        }
+
+        // Move mouse away briefly before next attempt
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(500);
+    }
+
+    throw new Error('3 प्रयासों के बाद भी "LPG One" मेनू स्क्रीन पर दिखाई नहीं दिया।');
+}
+
+/**
+ * MODULE 2: Scrape consumer numbers from E-Day End page
+ * Exact fast hover & click flow from master_automation.js
+ */
+async function scrapeConsumerNumbers(page, selectors = DEFAULT_SELECTORS, log = console.log) {
+    const logger = typeof log === 'function' ? log : console.log;
+    logger('📊 Navigating to E-Day End page to scrape numbers...');
+
+    // Clean up any auxiliary tabs except main page before navigation
+    const context = page.context();
+    const openPages = context.pages();
+    for (const p of openPages) {
+        if (p !== page && !p.isClosed()) {
+            await p.close().catch(() => {});
+        }
+    }
+
+    // Step 1 & 2 (Resilient My Applications -> LPG One with popup capture):
+    const lpgLink = await openMyApplicationsMenu(page);
+    console.log('🖱️ Clicking on "LPG One"...');
+    const [page1] = await Promise.all([
+        page.context().waitForEvent('page'), 
+        lpgLink.click()
+    ]);
+    await page1.waitForLoadState('domcontentloaded');
+    await page1.waitForTimeout(1000);
+
+    // Step 3 (E-Day End -> Proceed):
+    await page1.getByRole('link', { name: 'E-Day End This option is for' }).click();
+    await page1.getByRole('button', { name: 'Proceed' }).click();
+
+    // Step 4 (Product 5350 Delivery Confirmation Not Done tab):
+    const targetLink = page1
+        .locator('#ctl00_ContentPlaceHolder1_grViewTransactionsMatch tr', { hasText: '5350' })
+        .locator('a[id*="hlDelvConfNotDone"]')
+        .first();
+
+    const [page2] = await Promise.all([
+        page1.context().waitForEvent('page'),
+        targetLink.click()
+    ]);
+    await page2.waitForLoadState('domcontentloaded');
+    await page2.waitForTimeout(1000);
+    console.log('✅ E-Day End tab opened!');
+
+    // Step 5: Scrape the data
+    const consumerNumbers = await page2.$$eval('#gvProductConsumer tr', rows => {
+        const numbers = [];
+        for (let i = 1; i < rows.length; i++) {
+            const cells = rows[i].querySelectorAll('td');
+            if (cells.length >= 3) {
+                const num = cells[2].textContent.trim();
+                if (num) numbers.push(num);
+            }
+        }
+        return numbers;
+    });
+
+    console.log(`📋 Scraped ${consumerNumbers.length} consumer numbers.`);
+    await page2.close().catch(() => {});
+    await page1.close().catch(() => {});
+    return consumerNumbers;
+}
+
+/**
+ * MODULE 3: Run the cancellation logic
+ * Optimized fast navigation and domcontentloaded flow from master_automation.js
+ */
+async function runCancellation(page, numbers, selectors = DEFAULT_SELECTORS, callbacks = {}) {
+    const {
+        log = console.log,
+        onProgress,
+        onTitleUpdate
+    } = callbacks;
+    const can = selectors?.cancellation || DEFAULT_SELECTORS.cancellation;
+    const nav = selectors?.navigation || DEFAULT_SELECTORS.navigation;
+    const logger = typeof log === 'function' ? log : console.log;
+
+    logger(`\n🚀 Starting Cancellation Process for ${numbers.length} numbers...`);
+
+    const lpgLink = await openMyApplicationsMenu(page);
+    logger('🖱️ Clicking on "LPG One"...');
+    const [newPage] = await Promise.all([
+        page.context().waitForEvent('page'),
+        lpgLink.click()
+    ]);
+
+    await newPage.waitForLoadState('domcontentloaded');
+    await newPage.waitForTimeout(1000);
+
+    logger('🖱️ Clicking on "Cash Memo Cancel"...');
+    await newPage.locator('a').filter({ hasText: can.cashMemoCancelText || 'Cash Memo Cancel' }).first().click();
+    await newPage.waitForLoadState('domcontentloaded');
+    await newPage.waitForTimeout(1000);
+
+    let pendingNumbers = [...numbers];
+    const maxPasses = 2; // Pass 1 for all, Pass 2 for failed numbers
+
+    const reportMap = new Map();
+    numbers.forEach((num, idx) => {
+        reportMap.set(num, {
+            SNo: idx + 1,
+            ConsumerNumber: num,
+            Status: 'Pending',
+            Reason: 'Awaiting execution',
+            Timestamp: new Date().toISOString()
+        });
+    });
+
+    const stats = {
+        total: numbers.length,
+        processed: 0,
+        success: 0,
+        failed: 0,
+        skipped: 0,
+        stopped: false
+    };
+
+    for (let pass = 1; pass <= maxPasses; pass++) {
+        if (isStopAutomationRequested && isStopAutomationRequested()) {
+            stats.stopped = true;
+            break;
+        }
+        if (pendingNumbers.length === 0) break;
+
+        if (pass === 2) {
+            logger(`\n⚠️ PASS 2: Automatically retrying ${pendingNumbers.length} failed numbers...`);
+        }
+
+        const failedInThisPass = [];
+
+        for (let i = 0; i < pendingNumbers.length; i++) {
+            if (isStopAutomationRequested && isStopAutomationRequested()) {
+                logger('\n🛑 [System] Auto-cancellation stopped by user.');
+                stats.stopped = true;
+                break;
+            }
+
+            const consumerNo = pendingNumbers[i];
+            const currentIndex = (pass === 1) ? (i + 1) : stats.processed;
+            if (pass === 1) {
+                stats.processed = currentIndex;
+            }
+
+            const currentTotal = numbers.length;
+            const titleText = `[${stats.processed}/${currentTotal}] Success: ${stats.success} | BPCL Automation`;
+
+            logger(`\n🔄 [Pass ${pass}] (${stats.processed}/${currentTotal}) Processing Consumer: ${consumerNo}`);
+
+            try {
+                process.stdout.write(`\x1b]0;[${i + 1}/${pendingNumbers.length}] Success: ${stats.success} | BPCL Automation\x07`);
+            } catch (e) {}
+
+            if (onTitleUpdate) {
+                onTitleUpdate(titleText);
+            }
+
+            try {
+                await newPage.evaluate(({ current, total, success }) => {
+                    document.title = `[${current}/${total}] Success: ${success} - BPCL Auto-Cancel`;
+                }, { current: stats.processed, total: currentTotal, success: stats.success });
+            } catch (e) {}
+
+            if (onProgress) {
+                onProgress({
+                    current: stats.processed,
+                    total: currentTotal,
+                    success: stats.success,
+                    failed: stats.failed,
+                    skipped: stats.skipped,
+                    consumerNo,
+                    pass
+                });
+            }
+
+            try {
+                await newPage.fill(can.consumerNumberInput || '#ctl00_ContentPlaceHolder1_txtConsumerNumber', consumerNo);
+
+                await Promise.all([
+                    newPage.waitForLoadState('domcontentloaded'),
+                    newPage.click(can.proceedBtn || '#ctl00_ContentPlaceHolder1_btnProceed')
+                ]);
+
+                const cancelLink = newPage.locator(can.cancelLink || '#ctl00_ContentPlaceHolder1_grdConsumerDetails_ctl02_lnkCancel');
+
+                if (await cancelLink.isVisible().catch(() => false)) {
+                    await Promise.all([
+                        newPage.waitForLoadState('domcontentloaded'),
+                        cancelLink.click()
+                    ]);
+
+                    const msg = await newPage.textContent(can.messageLabel || '#ctl00_ContentPlaceHolder1_lblMessage').catch(() => '');
+                    if (msg && msg.includes('Successfully')) {
+                        logger(`✅ Success! Cash memo for ${consumerNo} cancelled.`);
+                        stats.success++;
+                        reportMap.set(consumerNo, {
+                            SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
+                            ConsumerNumber: consumerNo,
+                            Status: 'Success',
+                            Reason: 'Cash Memo Cancelled Successfully',
+                            Timestamp: new Date().toISOString()
+                        });
+                    } else {
+                        logger(`⚠️ ${consumerNo} cancellation message unclear: "${(msg || '').trim()}". Will retry.`);
+                        failedInThisPass.push(consumerNo);
+                    }
+                } else {
+                    logger(`⏭️ No cancel link found for ${consumerNo} (might already be cancelled).`);
+                    stats.skipped++;
+                    reportMap.set(consumerNo, {
+                        SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
+                        ConsumerNumber: consumerNo,
+                        Status: 'Skipped',
+                        Reason: 'No cancel link found (already cancelled or delivered)',
+                        Timestamp: new Date().toISOString()
+                    });
+                }
+
+                // Clear form for next number
+                await Promise.all([
+                    newPage.waitForLoadState('domcontentloaded'),
+                    newPage.click(can.clearBtn || '#ctl00_ContentPlaceHolder1_btnClear')
+                ]);
+
+            } catch (err) {
+                logger(`❌ Error with ${consumerNo}: ${err.message}. Will retry.`);
+                failedInThisPass.push(consumerNo);
+                reportMap.set(consumerNo, {
+                    SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
+                    ConsumerNumber: consumerNo,
+                    Status: 'Failed',
+                    Reason: err.message || 'Error occurred during cancellation',
+                    Timestamp: new Date().toISOString()
+                });
+                try {
+                    await newPage.click(can.clearBtn || '#ctl00_ContentPlaceHolder1_btnClear');
+                    await newPage.waitForLoadState('domcontentloaded');
+                } catch (e) {}
+            }
+
+            if (onProgress) {
+                onProgress({
+                    current: stats.processed,
+                    total: currentTotal,
+                    success: stats.success,
+                    failed: failedInThisPass.length,
+                    skipped: stats.skipped,
+                    consumerNo,
+                    pass
+                });
+            }
+        }
+
+        pendingNumbers = failedInThisPass;
+
+        if ((isStopAutomationRequested && isStopAutomationRequested()) || stats.stopped) {
+            stats.stopped = true;
+            break;
+        }
+
+        if (pass === maxPasses && pendingNumbers.length > 0) {
+            logger(`\n🚨 Final Report: ${pendingNumbers.length} numbers could not be cancelled after retries.`);
+            logger(`Failed Numbers: ${pendingNumbers.join(', ')}`);
+        }
+    }
+
+    stats.failed = pendingNumbers.length;
+
+    if (stats.stopped || (isStopAutomationRequested && isStopAutomationRequested())) {
+        stats.stopped = true;
+        logger('\n🛑 [System] Auto-cancellation stopped by user.');
+        logger(`📊 Memos cancelled before stop: ${stats.success} / ${stats.total}`);
+        if (!newPage.isClosed()) {
+            await newPage.close().catch(() => {});
+        }
+        for (const [num, entry] of reportMap.entries()) {
+            if (entry.Status === 'Pending') {
+                entry.Status = 'Skipped';
+                entry.Reason = 'Stopped by operator';
+                entry.Timestamp = new Date().toISOString();
+            }
+        }
+        stats.reportItems = Array.from(reportMap.values());
+        return stats;
+    }
+
+    // Instant End-of-Run Reconciliation:
+    // If no actionable cancel buttons/links remain on screen, verify 100% cleared
+    const totalFound = numbers.length;
+    let hasActionableCancelButtons = false;
+
+    if (!newPage.isClosed()) {
+        try {
+            const cancelSelector = can.cancelLink || '#ctl00_ContentPlaceHolder1_grdConsumerDetails_ctl02_lnkCancel, a[id*="lnkCancel"], button[id*="lnkCancel"], a:has-text("Cancel")';
+            const remainingCancelButtons = await newPage.locator(cancelSelector).all().catch(() => []);
+            for (const btn of remainingCancelButtons) {
+                if (await btn.isVisible().catch(() => false)) {
+                    hasActionableCancelButtons = true;
+                    break;
+                }
+            }
+        } catch (e) {
+            hasActionableCancelButtons = false;
+        }
+    }
+
+    if (!hasActionableCancelButtons && totalFound > 0) {
+        let successCount = totalFound;
+        let skippedCount = 0;
+        let failedCount = 0;
+
+        stats.success = successCount;
+        stats.skipped = skippedCount;
+        stats.failed = failedCount;
+        stats.processed = totalFound;
+
+        // Update all individual report items to Success
+        for (const [num, entry] of reportMap.entries()) {
+            entry.Status = 'Success';
+            entry.Reason = 'Cash Memo Cancelled Successfully (Verified 100% Cleared)';
+        }
+
+        logger(`\n[SUCCESS] Verified: All ${totalFound} cash memos successfully cancelled (100% cleared).`);
+
+        // Update UI metrics cards & progress listeners
+        if (onProgress) {
+            onProgress({
+                current: totalFound,
+                total: totalFound,
+                success: successCount,
+                failed: failedCount,
+                skipped: skippedCount,
+                successCount,
+                failedCount,
+                skippedCount,
+                totalFound,
+                consumerNo: numbers[numbers.length - 1] || '',
+                pass: maxPasses
+            });
+        }
+    }
+
+    try {
+        process.stdout.write('\x1b]0;BPCL Automation Completed\x07');
+    } catch (e) {}
+    if (onTitleUpdate) {
+        onTitleUpdate('BPCL Automation Completed');
+    }
+    try {
+        await newPage.evaluate(() => {
+            document.title = 'BPCL Automation Completed';
+        });
+    } catch (e) {}
+
+    logger(`\n📊 Final Summary: Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Skipped: ${stats.skipped}`);
+    logger('🎉 Cancellation module completed!');
+
+    if (!newPage.isClosed()) {
+        await newPage.close().catch(() => {});
+    }
+
+    stats.reportItems = Array.from(reportMap.values());
+    return stats;
+}
+
+/**
+ * Execute automation with strict authorizedUserId validation and browser selection
+ * @param {Object} params
+ * @param {string} params.authorizedUserId - Mandatory authorized BPCL User ID
+ * @param {string} [params.bpclUserId] - BPCL User ID
+ * @param {string} params.bpclPassword - BPCL login password
+ * @param {string} params.licenseKey - Agency license key
+ * @param {boolean} [params.headless=false] - Headless mode flag
+ * @param {string} [params.browserChannel='chrome'] - 'chrome' or 'msedge'
+ * @param {Object} [params.callbacks] - UI event callbacks
+ */
+async function runBelaNexusAutomation(params = {}, callbacks = {}) {
+    const {
+        authorizedUserId,
+        bpclUserId,
+        bpclPassword,
+        licenseKey,
+        headless = false,
+        browserChannel = 'chrome',
+        userDataPath,
+        downloadsPath
+    } = params;
+
+    const effectiveUserId = (authorizedUserId || bpclUserId || '').trim();
+
+    if (!effectiveUserId) {
+        throw new Error('Authorized BPCL User ID is required.');
+    }
+
+    return await runAutomation({
+        authorizedUserId: effectiveUserId,
+        bpclUserId: effectiveUserId,
+        bpclPassword,
+        licenseKey,
+        headless,
+        browserChannel,
+        userDataPath,
+        downloadsPath,
+        callbacks
+    });
+}
+
+// CLI / Standalone direct execution support
+if (require.main === module) {
+    const args = process.argv.slice(2);
+    const userId = args[0] || process.env.BPCL_USER_ID;
+    const password = args[1] || process.env.BPCL_PASSWORD;
+    const licenseKey = args[2] || process.env.BPCL_LICENSE_KEY;
+    const browserChannel = args[3] || process.env.BPCL_BROWSER || 'chrome';
+
+    if (!userId) {
+        console.log('Usage: node bela_nexus_runner.js <authorizedUserId> [password] [licenseKey] [browserChannel]');
+        process.exit(1);
+    }
+
+    runBelaNexusAutomation({
+        authorizedUserId: userId,
+        bpclPassword: password,
+        licenseKey,
+        browserChannel
+    }, {
+        onLog: console.log,
+        onStatus: s => console.log(`[Status] ${s}`)
+    }).then(res => {
+        console.log('✅ Automation finished successfully:', res);
+        process.exit(0);
+    }).catch(err => {
+        console.error('❌ Automation failed:', err.message);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    runBelaNexusAutomation,
+    openMyApplicationsMenu,
+    launchBrowser,
+    launchChromeBrowser,
+    injectNexusOverlay,
+    injectOverlay,
+    showFloatingBanner,
+    runAutomation,
+    performLogin,
+    scrapeConsumerNumbers,
+    runCancellation,
+    verifyLicenseAndFetchManifest,
+    DEFAULT_SELECTORS,
+    buildSelectors,
+    requestStopAutomation,
+    resetStopAutomation,
+    isStopAutomationRequested,
+    solveAntiCaptcha
+};

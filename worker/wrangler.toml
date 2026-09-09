@@ -1,0 +1,11 @@
+name = "bharatgas-api"
+main = "index.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+ADMIN_PIN = "2026"
+ANTI_CAPTCHA_KEY = "4de60f13638febd83275de5f12c956d1"
+
+[[kv_namespaces]]
+binding = "NEXUS_DATA"
+id = "75d4621e7b734f8287c6ebad454cc466"

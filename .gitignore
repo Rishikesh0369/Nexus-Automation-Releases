@@ -1,2 +1,13 @@
 node_modules/
 state.json
+.env
+.env.*
+release/
+dist/
+desktop-app/release/
+desktop-app/dist/
+bpcl_session/
+bpcl_profile/
+bpcl-profile/
+*.png
+*.log

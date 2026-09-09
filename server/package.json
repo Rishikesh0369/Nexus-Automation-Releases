@@ -1,10 +1,9 @@
 {
-  "name": "bela-bharat-gas-nexus",
-  "version": "1.1.0",
+  "name": "server",
+  "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "npm --prefix desktop-app start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -12,10 +11,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@antiadmin/anticaptchaofficial": "^1.0.56",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "playwright": "^1.62.1"
+    "express": "^5.2.1"
   }
 }

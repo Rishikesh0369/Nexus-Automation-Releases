@@ -1,0 +1,1750 @@
+// -------------------------------------------------------------
+// BELA BHARAT GAS NEXUS - RENDERER SCRIPT
+// -------------------------------------------------------------
+
+const WORKER_BASE_URL = (window.electronAPI && window.electronAPI.workerBaseUrl) || 'https://bharatgas-api.www-rishikesh111.workers.dev';
+window.WORKER_BASE_URL = WORKER_BASE_URL;
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Tab Elements
+    const tabBtnDashboard = document.getElementById('tabBtnDashboard');
+    const tabBtnSettings = document.getElementById('tabBtnSettings');
+    const sectionDashboard = document.getElementById('sectionDashboard');
+    const sectionSettings = document.getElementById('sectionSettings');
+
+    // Dashboard UI Elements
+    const statusPulseDot = document.getElementById('statusPulseDot');
+    const statusBadgeText = document.getElementById('statusBadgeText');
+    const statusDetailText = document.getElementById('statusDetailText');
+    const liveProgressSummary = document.getElementById('liveProgressSummary');
+
+    const btnStartCancellation = document.getElementById('btnStartCancellation');
+    const btnStartText = document.getElementById('btnStartText');
+    const playIcon = btnStartCancellation.querySelector('.play-icon');
+    const stopIcon = btnStartCancellation.querySelector('.stop-icon');
+    const spinnerIcon = btnStartCancellation.querySelector('.spinner-icon');
+
+    const progressBarFill = document.getElementById('progressBarFill');
+    const progressPercentageText = document.getElementById('progressPercentageText');
+
+    const statTotal = document.getElementById('statTotal');
+    const statProcessed = document.getElementById('statProcessed');
+    const statSuccess = document.getElementById('statSuccess');
+    const statFailed = document.getElementById('statFailed');
+    const statSkipped = document.getElementById('statSkipped');
+
+    const terminalConsole = document.getElementById('terminalConsole');
+    const btnClearLogs = document.getElementById('btnClearLogs');
+
+    // Settings UI Elements
+    const inputBpclUser = document.getElementById('bpcl-user') || document.getElementById('inputUserId');
+    const inputBpclPassword = document.getElementById('bpcl-password') || document.getElementById('inputPassword');
+    const inputLicenseKey = document.getElementById('inputLicenseKey');
+    const selectBrowserChannel = document.getElementById('selectBrowserChannel');
+    const btnSaveSettings = document.getElementById('btnSaveSettings');
+    const btnClearSettings = document.getElementById('btnClearSettings');
+    const saveStatusToast = document.getElementById('saveStatusToast');
+
+    // Header & Agency Display
+    const agencyBadge = document.getElementById('agencyBadge') || document.getElementById('agencyDisplay');
+    const agencyDisplay = agencyBadge;
+    let currentAgencyName = '';
+
+    // Subscription Expiry UI Elements
+    const subscriptionExpiryBanner = document.getElementById('subscriptionExpiryBanner');
+    const expiryBannerMessage = document.getElementById('expiryBannerMessage');
+    const btnRenewLicense = document.getElementById('btnRenewLicense');
+    let isSubscriptionExpired = false;
+    let currentExpiresAt = '';
+
+    // Renewal Hub Modal Elements
+    const renewalModal = document.getElementById('renewalModal');
+    const btnCloseRenewalModal = document.getElementById('btnCloseRenewalModal');
+    const renewalModalStatusText = document.getElementById('renewalModalStatusText');
+    const renewalPlanName = document.getElementById('renewalPlanName');
+    const renewalAmount = document.getElementById('renewalAmount');
+    const renewalUpiId = document.getElementById('renewalUpiId');
+    const btnCopyUpi = document.getElementById('btnCopyUpi');
+    const copyUpiText = document.getElementById('copyUpiText');
+    const btnRenewalWhatsApp = document.getElementById('btnRenewalWhatsApp');
+    const btnRenewalCall = document.getElementById('btnRenewalCall');
+    const renewalCallText = document.getElementById('renewalCallText');
+    const btnRenewalInAppChat = document.getElementById('btnRenewalInAppChat');
+
+    let currentRenewalConfig = {
+        planName: "Quarterly Pro (3 Months)",
+        amount: "₹1,999",
+        upiId: "7004015687@upi",
+        phone: "+917004015687",
+        whatsapp: "7004015687"
+    };
+
+    // Update Notification UI Elements
+    const updateBtn = document.getElementById('update-btn');
+    const updateModal = document.getElementById('updateModal');
+    const modalVersionInfo = document.getElementById('modalVersionInfo');
+    const btnUpdateLater = document.getElementById('btnUpdateLater');
+    const btnUpdateNow = document.getElementById('btnUpdateNow');
+
+    // Stop Confirmation Modal UI Elements
+    const stopConfirmModal = document.getElementById('stopConfirmModal');
+    const btnConfirmStop = document.getElementById('btnConfirmStop');
+    const btnKeepRunning = document.getElementById('btnKeepRunning');
+    const btnStopExplicit = document.getElementById('btnStop');
+
+    // Start Confirmation Modal UI Elements
+    const startConfirmModal = document.getElementById('startConfirmModal');
+    const btnConfirmStart = document.getElementById('btnConfirmStart');
+    const btnCancelStart = document.getElementById('btnCancelStart');
+
+    // Subtle OTA Background Update Elements
+    const otaUpdateBanner = document.getElementById('otaUpdateBanner');
+    const btnOtaRestart = document.getElementById('btnOtaRestart');
+    const btnOtaDismiss = document.getElementById('btnOtaDismiss');
+
+    // Execution Report & Completion UI Elements
+    const reportActionContainer = document.getElementById('reportActionContainer');
+    const reportSuccessBadge = document.getElementById('reportSuccessBadge');
+    const reportBadgeText = document.getElementById('reportBadgeText');
+    const btnOpenReport = document.getElementById('btnOpenReport');
+    let latestReportPath = null;
+
+    function showReportAction(reportPath, isStopped = false) {
+        if (!reportPath) return;
+        latestReportPath = reportPath;
+        if (reportActionContainer) {
+            reportActionContainer.classList.remove('hidden');
+        }
+        if (reportBadgeText) {
+            reportBadgeText.textContent = isStopped ? 'Stopped (Report Ready)' : 'Process Complete';
+        }
+    }
+
+    if (btnOpenReport) {
+        btnOpenReport.addEventListener('click', async () => {
+            if (latestReportPath && window.electronAPI && window.electronAPI.openReport) {
+                appendLog(`📄 Launching CSV Execution Report in Excel: ${latestReportPath}`, 'system');
+                const res = await window.electronAPI.openReport(latestReportPath);
+                if (res && !res.success && res.message) {
+                    appendLog(`⚠️ Could not open report: ${res.message}`, 'warn');
+                }
+            } else {
+                appendLog('⚠️ No execution report path available.', 'warn');
+            }
+        });
+    }
+
+    if (btnOtaRestart) {
+        btnOtaRestart.addEventListener('click', async () => {
+            if (window.electronAPI && window.electronAPI.restartApp) {
+                appendLog('🔄 Restarting application to apply update...', 'system');
+                await window.electronAPI.restartApp();
+            }
+        });
+    }
+
+    if (btnOtaDismiss) {
+        btnOtaDismiss.addEventListener('click', () => {
+            if (otaUpdateBanner) {
+                otaUpdateBanner.classList.add('hidden');
+            }
+        });
+    }
+
+    let currentAppVersion = '1.0.0';
+    let availableUpdateInfo = null;
+    let isLicenseValid = false;
+
+    function updateAgencyBadge(status, agencyName = '', customMessage = '') {
+        const badge = document.getElementById('agencyBadge') || document.getElementById('agencyDisplay');
+        if (!badge) return;
+
+        badge.classList.remove('badge-unregistered', 'badge-verified', 'badge-invalid');
+
+        if (status === 'verified') {
+            const cleanName = (agencyName && agencyName.trim()) || currentAgencyName || 'Agency Slot';
+            currentAgencyName = cleanName;
+            isLicenseValid = true;
+            badge.className = 'agency-tag badge-verified';
+            badge.textContent = `🟢 ${cleanName}`;
+            if (!isSubscriptionExpired && !isProcessRunning) {
+                btnStartCancellation.disabled = false;
+                btnStartCancellation.classList.remove('btn-subscription-expired', 'btn-danger-pulsing');
+                btnStartCancellation.classList.add('btn-primary');
+                btnStartText.textContent = 'Start Auto-Cancellation';
+                playIcon.classList.remove('hidden');
+                if (stopIcon) stopIcon.classList.add('hidden');
+                spinnerIcon.classList.add('hidden');
+            }
+        } else if (status === 'invalid') {
+            currentAgencyName = '';
+            isLicenseValid = false;
+            badge.className = 'agency-tag badge-invalid';
+            badge.textContent = '🔴 अमान्य BPCL User ID या License Key';
+
+            // Clear saved agency name in local storage if invalid
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                window.electronAPI.saveSettings({ agencyName: '' }).catch(() => {});
+            }
+
+            // Strictly disable and block automation run triggers
+            btnStartCancellation.disabled = true;
+            btnStartCancellation.classList.remove('btn-danger-pulsing');
+            btnStartCancellation.classList.add('btn-subscription-expired');
+            btnStartText.textContent = '🔒 Invalid License';
+            playIcon.classList.add('hidden');
+            if (stopIcon) stopIcon.classList.add('hidden');
+            spinnerIcon.classList.add('hidden');
+            updateStatus('Invalid License');
+            if (statusDetailText) {
+                statusDetailText.textContent = customMessage || 'अमान्य BPCL User ID या License Key। कृपया सेटिंग्स जांचें।';
+            }
+        } else {
+            // 'no-license' or 'unregistered'
+            currentAgencyName = '';
+            isLicenseValid = false;
+            badge.className = 'agency-tag badge-invalid';
+            badge.textContent = '🔴 No License Configured';
+            btnStartCancellation.disabled = true;
+            btnStartCancellation.classList.remove('btn-danger-pulsing');
+            btnStartCancellation.classList.add('btn-subscription-expired');
+            btnStartText.textContent = '🔒 License Required';
+            playIcon.classList.add('hidden');
+            if (stopIcon) stopIcon.classList.add('hidden');
+            spinnerIcon.classList.add('hidden');
+            updateStatus('License Required');
+            if (statusDetailText) {
+                statusDetailText.textContent = 'Please enter both BPCL User ID and License Key in Settings.';
+            }
+        }
+    }
+
+    function updateAgencyDisplay(distributor) {
+        if (distributor && distributor.trim()) {
+            updateAgencyBadge('verified', distributor);
+        } else {
+            updateAgencyBadge('no-license');
+        }
+    }
+
+    // ---------------------------------------------------------
+    // DYNAMIC CLOUD-DRIVEN UI THEME
+    // ---------------------------------------------------------
+    function applyDynamicTheme(uiTheme) {
+        if (!uiTheme) return;
+        let styleTag = document.getElementById('dynamic-cloud-theme');
+        if (!styleTag) {
+            styleTag = document.createElement('style');
+            styleTag.id = 'dynamic-cloud-theme';
+            document.head.appendChild(styleTag);
+        }
+
+        let css = '';
+        if (uiTheme.buttonColor) {
+            css += `
+                :root {
+                    --btn-cloud-color: ${uiTheme.buttonColor};
+                }
+                .btn-primary {
+                    background: ${uiTheme.buttonColor} !important;
+                    border-color: ${uiTheme.buttonColor} !important;
+                    box-shadow: 0 4px 15px ${uiTheme.buttonColor}66 !important;
+                }
+                .btn-primary:hover:not(:disabled) {
+                    filter: brightness(1.15);
+                    box-shadow: 0 6px 20px ${uiTheme.buttonColor}99 !important;
+                }
+            `;
+        }
+
+        if (uiTheme.customCss) {
+            css += `\n${uiTheme.customCss}`;
+        }
+
+        styleTag.textContent = css;
+        if (uiTheme.themeVersion) {
+            console.log(`🎨 Dynamic Cloud Theme v${uiTheme.themeVersion} applied.`);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // OPTIONAL NON-BLOCKING UPDATE NOTIFICATION
+    // ---------------------------------------------------------
+    function isNewerVersion(current, latest) {
+        if (!latest) return false;
+        const cleanCurrent = (current || '1.0.0').replace(/^v/, '').trim();
+        const cleanLatest = String(latest).replace(/^v/, '').trim();
+        const curParts = cleanCurrent.split('.').map(n => parseInt(n, 10) || 0);
+        const latParts = cleanLatest.split('.').map(n => parseInt(n, 10) || 0);
+        for (let i = 0; i < Math.max(curParts.length, latParts.length); i++) {
+            const c = curParts[i] || 0;
+            const l = latParts[i] || 0;
+            if (l > c) return true;
+            if (l < c) return false;
+        }
+        return false;
+    }
+
+    function checkForUpdates(latestVersion, updateUrl) {
+        if (!latestVersion) return;
+        const hasUpdate = isNewerVersion(currentAppVersion, latestVersion);
+        if (hasUpdate) {
+            availableUpdateInfo = { latestVersion, updateUrl };
+            if (updateBtn) {
+                updateBtn.classList.remove('hidden');
+            }
+            if (modalVersionInfo) {
+                modalVersionInfo.textContent = `Version ${latestVersion} available (Current: v${currentAppVersion})`;
+            }
+            console.log(`✨ Newer version detected: v${latestVersion}`);
+        } else {
+            if (updateBtn) {
+                updateBtn.classList.add('hidden');
+            }
+        }
+    }
+
+    if (updateBtn) {
+        updateBtn.addEventListener('click', () => {
+            if (updateModal) {
+                updateModal.classList.remove('hidden');
+            }
+        });
+    }
+
+    if (btnUpdateLater) {
+        btnUpdateLater.addEventListener('click', () => {
+            if (updateModal) {
+                updateModal.classList.add('hidden');
+            }
+        });
+    }
+
+    if (btnUpdateNow) {
+        btnUpdateNow.addEventListener('click', async () => {
+            if (updateModal) {
+                updateModal.classList.add('hidden');
+            }
+            appendLog('✨ Update acknowledged. Opening update source...', 'system');
+            if (availableUpdateInfo && availableUpdateInfo.updateUrl && window.electronAPI && window.electronAPI.openExternal) {
+                await window.electronAPI.openExternal(availableUpdateInfo.updateUrl);
+            } else {
+                appendLog('ℹ️ You are on the latest verified release track.', 'system');
+            }
+        });
+    }
+
+    // ---------------------------------------------------------
+    // UNIFIED MANIFEST PROCESSOR
+    // ---------------------------------------------------------
+    function processManifestResponse(response) {
+        if (!response) {
+            updateAgencyBadge('invalid');
+            return;
+        }
+
+        // Check if verification returned failure or 403 status
+        if (response.success === false || response.error === 'INVALID_LICENSE' || response.status === 403) {
+            updateAgencyBadge('invalid');
+            if (response.message) {
+                appendLog(`❌ License Error: ${response.message}`, 'error');
+            }
+            return;
+        }
+
+        // 1. Dynamic Agency Name
+        const distributor = response.agencyName || response.distributor || response.license?.name || response.name;
+        if (distributor) {
+            updateAgencyBadge('verified', distributor);
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                window.electronAPI.saveSettings({
+                    agencyName: distributor.trim()
+                }).catch(() => {});
+            }
+        } else {
+            updateAgencyBadge('verified', 'Bharat Gas Agency');
+        }
+
+        // 2. Dynamic Cloud-Driven UI/Theme
+        const uiTheme = response.uiTheme || response.manifest?.uiTheme;
+        if (uiTheme) {
+            applyDynamicTheme(uiTheme);
+        }
+
+        // 3. Optional Non-Blocking Update Check
+        const latestVersion = response.latestVersion || response.manifest?.latestVersion || response.version;
+        const updateUrl = response.updateUrl || response.manifest?.updateUrl;
+        if (latestVersion) {
+            checkForUpdates(latestVersion, updateUrl);
+        }
+
+        // 4. Graceful Subscription Expiration Check
+        handleSubscriptionExpiration(response);
+    }
+
+    function handleSubscriptionExpiration(response) {
+        if (!response) return;
+
+        const isExpired = Boolean(response.isExpired ?? response.manifest?.isExpired);
+        const expiresAt = response.expiresAt || response.manifest?.expiresAt || '';
+        const renewalCfg = response.renewalConfig || response.manifest?.renewalConfig;
+
+        if (renewalCfg) {
+            currentRenewalConfig = {
+                ...currentRenewalConfig,
+                ...renewalCfg
+            };
+        }
+
+        isSubscriptionExpired = isExpired;
+        currentExpiresAt = expiresAt;
+
+        if (isExpired) {
+            // 1. Render UI Expiry Banner
+            if (subscriptionExpiryBanner) {
+                if (expiryBannerMessage) {
+                    expiryBannerMessage.textContent = `⚠️ Subscription Expired: Your plan expired on ${expiresAt || 'a prior date'}. Automation is paused.`;
+                }
+                subscriptionExpiryBanner.classList.remove('hidden');
+            }
+
+            // 2. Automation Lock
+            btnStartCancellation.disabled = true;
+            btnStartCancellation.classList.add('btn-subscription-expired');
+            btnStartText.textContent = '🔒 Subscription Expired';
+            playIcon.classList.add('hidden');
+            if (stopIcon) stopIcon.classList.add('hidden');
+            spinnerIcon.classList.add('hidden');
+
+            updateStatus('Subscription Expired');
+            if (statusDetailText) {
+                statusDetailText.textContent = `Subscription expired on ${expiresAt || 'a prior date'}. Automation is paused.`;
+            }
+            appendLog(`⚠️ Subscription expired on ${expiresAt || 'a prior date'}. Automation is paused. Please renew license.`, 'warn');
+        } else {
+            // Active subscription
+            if (subscriptionExpiryBanner) {
+                subscriptionExpiryBanner.classList.add('hidden');
+            }
+            btnStartCancellation.classList.remove('btn-subscription-expired');
+            if (!isProcessRunning) {
+                btnStartCancellation.disabled = false;
+                btnStartText.textContent = 'Start Auto-Cancellation';
+                playIcon.classList.remove('hidden');
+            }
+        }
+    }
+
+    function openRenewalModal() {
+        if (!renewalModal) return;
+
+        const planName = currentRenewalConfig.planName || 'Quarterly Pro (3 Months)';
+        const amount = currentRenewalConfig.amount || '₹1,999';
+        const upiId = currentRenewalConfig.upiId || '7004015687@upi';
+        const phone = currentRenewalConfig.phone || '+917004015687';
+        const expires = currentExpiresAt || '2026-08-31';
+
+        if (renewalPlanName) renewalPlanName.textContent = planName;
+        if (renewalAmount) renewalAmount.textContent = amount;
+        if (renewalUpiId) renewalUpiId.textContent = upiId;
+        if (renewalModalStatusText) {
+            renewalModalStatusText.textContent = `Subscription Expired: Your plan expired on ${expires}. Automation is paused.`;
+        }
+        if (renewalCallText) {
+            renewalCallText.textContent = `Call Support (${phone})`;
+        }
+
+        renewalModal.classList.remove('hidden');
+    }
+
+    function closeRenewalModal() {
+        if (!renewalModal) return;
+        renewalModal.classList.add('hidden');
+    }
+
+    const btnTogglePassword = document.getElementById('btnTogglePassword');
+
+    // ---------------------------------------------------------
+    // TAB SWITCHING LOGIC
+    // ---------------------------------------------------------
+    function switchTab(targetTab) {
+        if (targetTab === 'dashboard') {
+            tabBtnDashboard.classList.add('active');
+            tabBtnSettings.classList.remove('active');
+            sectionDashboard.classList.add('active');
+            sectionSettings.classList.remove('active');
+        } else {
+            tabBtnDashboard.classList.remove('active');
+            tabBtnSettings.classList.add('active');
+            sectionDashboard.classList.remove('active');
+            sectionSettings.classList.add('active');
+        }
+    }
+
+    tabBtnDashboard.addEventListener('click', () => switchTab('dashboard'));
+    tabBtnSettings.addEventListener('click', () => switchTab('settings'));
+
+    // ---------------------------------------------------------
+    // PERSISTENT STORAGE HELPERS (nexusStore with localStorage fallback)
+    // ---------------------------------------------------------
+    async function getPersistentSetting(key) {
+        let val = null;
+        if (window.nexusStore && typeof window.nexusStore.get === 'function') {
+            try {
+                val = await window.nexusStore.get(key);
+            } catch (e) {
+                console.warn(`[nexusStore] Failed to read ${key}:`, e);
+            }
+        }
+        if (val === null || val === undefined || val === '') {
+            try {
+                val = localStorage.getItem(key);
+            } catch (e) {
+                console.warn(`[localStorage] Failed to read ${key}:`, e);
+            }
+        }
+        return val ? String(val).trim() : '';
+    }
+
+    async function setPersistentSetting(key, val) {
+        const strVal = (val === null || val === undefined) ? '' : String(val).trim();
+        if (window.nexusStore && typeof window.nexusStore.set === 'function') {
+            try {
+                await window.nexusStore.set(key, strVal);
+            } catch (e) {
+                console.warn(`[nexusStore] Failed to write ${key}:`, e);
+            }
+        }
+        try {
+            localStorage.setItem(key, strVal);
+        } catch (e) {
+            console.warn(`[localStorage] Failed to write ${key}:`, e);
+        }
+    }
+
+    async function clearPersistentSettings() {
+        if (window.nexusStore && typeof window.nexusStore.clear === 'function') {
+            try {
+                await window.nexusStore.clear();
+            } catch (e) {
+                console.warn('[nexusStore] Failed to clear:', e);
+            }
+        }
+        try {
+            localStorage.removeItem('bpclUserId');
+            localStorage.removeItem('bpclPassword');
+            localStorage.removeItem('licenseKey');
+            localStorage.removeItem('agencyName');
+            localStorage.removeItem('userId');
+            localStorage.removeItem('password');
+        } catch (e) {
+            console.warn('[localStorage] Failed to clear:', e);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // NOTIFICATION & VERIFICATION HELPERS
+    // ---------------------------------------------------------
+    function showNotification(message, type = 'info') {
+        if (saveStatusToast) {
+            const toastText = saveStatusToast.querySelector('#saveStatusText') || saveStatusToast;
+            if (toastText !== saveStatusToast) {
+                toastText.textContent = message;
+            }
+            if (type === 'error') {
+                saveStatusToast.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+                saveStatusToast.style.color = '#f87171';
+            } else if (type === 'success') {
+                saveStatusToast.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+                saveStatusToast.style.color = '#4ade80';
+            } else {
+                saveStatusToast.style.borderColor = '';
+                saveStatusToast.style.color = '';
+            }
+            saveStatusToast.classList.remove('hidden');
+            clearTimeout(saveStatusToast._timer);
+            saveStatusToast._timer = setTimeout(() => {
+                saveStatusToast.classList.add('hidden');
+            }, 3500);
+        }
+        appendLog((type === 'error' ? '❌ ' : type === 'success' ? '✅ ' : 'ℹ️ ') + message, type);
+    }
+
+    async function verifyCredentials(licenseKey, bpclUserId) {
+        const cleanKey = (licenseKey || '').trim();
+        const cleanUserId = (bpclUserId || '').trim();
+
+        if (!cleanKey || !cleanUserId) {
+            return {
+                status: 400,
+                success: false,
+                error: 'MISSING_FIELDS',
+                message: 'कृपया BPCL User ID और License Key दोनों दर्ज करें।'
+            };
+        }
+
+        try {
+            const res = await fetch(`${WORKER_BASE_URL}/api/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ licenseKey: cleanKey, bpclUserId: cleanUserId })
+            });
+            const data = await res.json().catch(() => ({ success: false, message: 'Invalid response from verification server.' }));
+            return {
+                status: res.status,
+                ok: res.ok,
+                ...data
+            };
+        } catch (fetchErr) {
+            if (window.electronAPI && window.electronAPI.verifyLicense) {
+                try {
+                    const ipcRes = await window.electronAPI.verifyLicense(cleanKey, cleanUserId);
+                    return ipcRes;
+                } catch (ipcErr) {
+                    return { success: false, status: 0, message: ipcErr.message };
+                }
+            }
+            return { success: false, status: 0, message: fetchErr.message };
+        }
+    }
+
+    // ---------------------------------------------------------
+    // SETTINGS MANAGEMENT (nexusStore + localStorage Dual Persistence)
+    // ---------------------------------------------------------
+    async function loadStoredSettings() {
+        try {
+            if (window.electronAPI && window.electronAPI.getAppVersion) {
+                currentAppVersion = await window.electronAPI.getAppVersion();
+            }
+
+            // Read bpclUserId, bpclPassword, licenseKey, and browserChannel from nexusStore (fallback to localStorage)
+            let [savedUser, savedPass, savedKey, savedBrowser] = await Promise.all([
+                getPersistentSetting('bpclUserId'),
+                getPersistentSetting('bpclPassword'),
+                getPersistentSetting('licenseKey'),
+                getPersistentSetting('browserChannel')
+            ]);
+
+            // Legacy backward-compatibility fallbacks
+            if (!savedUser) {
+                savedUser = await getPersistentSetting('userId');
+            }
+            if (!savedPass) {
+                savedPass = await getPersistentSetting('password');
+            }
+
+            // Automatically populate the inputs with the saved values
+            if (inputBpclUser) inputBpclUser.value = savedUser || '';
+            if (inputBpclPassword) inputBpclPassword.value = savedPass || '';
+            if (inputLicenseKey) inputLicenseKey.value = savedKey || '';
+            if (selectBrowserChannel) selectBrowserChannel.value = savedBrowser === 'msedge' ? 'msedge' : 'chrome';
+
+            const bpclUserId = (savedUser || '').trim();
+            const licenseKey = (savedKey || '').trim();
+
+            // Startup auto-load: On DOMContentLoaded, load saved credentials from storage;
+            // if both exist, run verification silently in the background to restore the green badge.
+            if (!bpclUserId || !licenseKey) {
+                updateAgencyBadge('no-license');
+            } else {
+                const res = await verifyCredentials(licenseKey, bpclUserId);
+                if (res && res.success && res.status !== 400 && res.status !== 403) {
+                    const agencyName = res.agencyName || res.distributor || 'Agency Slot';
+                    updateAgencyBadge('verified', agencyName);
+                    processManifestResponse(res);
+                } else {
+                    const errMsg = res?.message || 'अमान्य BPCL User ID या License Key';
+                    updateAgencyBadge('invalid', '', errMsg);
+                }
+            }
+        } catch (err) {
+            updateAgencyBadge('no-license');
+        }
+    }
+
+    // Auto-persist browser selection when dropdown changes
+    if (selectBrowserChannel) {
+        selectBrowserChannel.addEventListener('change', async () => {
+            const channel = selectBrowserChannel.value === 'msedge' ? 'msedge' : 'chrome';
+            await setPersistentSetting('browserChannel', channel);
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                await window.electronAPI.saveSettings({ browserChannel: channel }).catch(() => {});
+            }
+            appendLog(`🌐 Preferred browser set to: ${channel === 'msedge' ? 'Microsoft Edge' : 'Google Chrome'}`, 'system');
+        });
+    }
+
+    btnSaveSettings.addEventListener('click', async () => {
+        const bpclUserId = (inputBpclUser ? inputBpclUser.value : '').trim();
+        const bpclPassword = (inputBpclPassword ? inputBpclPassword.value : '').trim();
+        const licenseKey = (inputLicenseKey ? inputLicenseKey.value : '').trim();
+        const browserChannel = selectBrowserChannel ? selectBrowserChannel.value : 'chrome';
+
+        // 1 & 2. If either input is blank:
+        if (!bpclUserId || !licenseKey) {
+            showNotification('कृपया BPCL User ID और License Key दोनों दर्ज करें।', 'error');
+            updateAgencyBadge('no-license');
+            return;
+        }
+
+        try {
+            btnSaveSettings.disabled = true;
+            appendLog('🔐 Verifying BPCL User ID and License Key...', 'system');
+
+            // 3. Send POST request to /api/verify with { licenseKey, bpclUserId }
+            const res = await verifyCredentials(licenseKey, bpclUserId);
+
+            // 4. If response is not success (status 400/403 or success: false):
+            if (!res || res.status === 400 || res.status === 403 || !res.success) {
+                const errMsg = res?.message || 'अमान्य BPCL User ID या License Key';
+                updateAgencyBadge('invalid', '', errMsg);
+                showNotification(errMsg, 'error');
+                btnSaveSettings.disabled = false;
+                return;
+            }
+
+            // 5. If response is success (200):
+            const agencyName = res.agencyName || res.distributor || 'Agency Slot';
+            updateAgencyBadge('verified', agencyName);
+
+            // Persist bpclUserId, bpclPassword, licenseKey, agencyName, and browserChannel
+            await Promise.all([
+                setPersistentSetting('bpclUserId', bpclUserId),
+                setPersistentSetting('bpclPassword', bpclPassword),
+                setPersistentSetting('licenseKey', licenseKey),
+                setPersistentSetting('agencyName', agencyName),
+                setPersistentSetting('browserChannel', browserChannel)
+            ]);
+
+            // Also keep electronAPI settings store updated
+            if (window.electronAPI && window.electronAPI.saveSettings) {
+                await window.electronAPI.saveSettings({
+                    bpclUserId,
+                    bpclPassword,
+                    licenseKey,
+                    agencyName,
+                    browserChannel
+                }).catch(() => {});
+            }
+
+            // Process full manifest (theme, updates, expiration, anticaptcha)
+            processManifestResponse(res);
+
+            showNotification('Configuration Saved Successfully', 'success');
+            setTimeout(() => {
+                btnSaveSettings.disabled = false;
+            }, 1000);
+        } catch (err) {
+            btnSaveSettings.disabled = false;
+            updateAgencyBadge('invalid');
+            showNotification(`Error: ${err.message}`, 'error');
+        }
+    });
+
+    // Clear / Reset Settings (Purge all stored credentials and local data)
+    if (btnClearSettings) {
+        btnClearSettings.addEventListener('click', async () => {
+            try {
+                btnClearSettings.disabled = true;
+                await clearPersistentSettings();
+                if (window.electronAPI && window.electronAPI.clearSettings) {
+                    await window.electronAPI.clearSettings().catch(() => {});
+                }
+                inputBpclUser.value = '';
+                inputBpclPassword.value = '';
+                inputLicenseKey.value = '';
+                if (selectBrowserChannel) selectBrowserChannel.value = 'chrome';
+                updateAgencyBadge('unregistered');
+                appendLog('🗑️ All saved credentials and local data have been purged.', 'system');
+                setTimeout(() => {
+                    btnClearSettings.disabled = false;
+                }, 400);
+            } catch (err) {
+                btnClearSettings.disabled = false;
+                appendLog(`❌ Error clearing settings: ${err.message}`, 'error');
+            }
+        });
+    }
+
+    // Password visibility toggle
+    btnTogglePassword.addEventListener('click', () => {
+        const isPassword = inputBpclPassword.type === 'password';
+        inputBpclPassword.type = isPassword ? 'text' : 'password';
+    });
+
+    // ---------------------------------------------------------
+    // STATUS & PROGRESS PRESENTATION
+    // ---------------------------------------------------------
+    function updateStatus(state) {
+        if (statusBadgeText) statusBadgeText.textContent = state;
+        const stateBadge = document.getElementById('stateBadge');
+        if (stateBadge) {
+            const cleanState = state ? state.replace(/^[•\s]+/, '') : 'Idle';
+            stateBadge.textContent = `• ${cleanState}`;
+            stateBadge.className = 'status-pill';
+            const sLower = cleanState.toLowerCase();
+            if (sLower.includes('idle')) {
+                stateBadge.classList.add('status-idle');
+            } else if (sLower.includes('complete')) {
+                stateBadge.classList.add('status-completed');
+            } else if (sLower.includes('stopping') || sLower.includes('stopped')) {
+                stateBadge.classList.add('status-stopped');
+            } else if (sLower.includes('error') || sLower.includes('fail')) {
+                stateBadge.classList.add('status-error');
+            } else {
+                stateBadge.classList.add('status-running');
+            }
+        }
+
+        if (statusPulseDot) {
+            statusPulseDot.className = 'pulse-dot';
+            const s = (state || '').toLowerCase();
+            if (s.includes('idle')) {
+                statusPulseDot.classList.add('idle');
+            } else if (s.includes('complete')) {
+                statusPulseDot.classList.add('completed');
+            } else if (s.includes('stopping')) {
+                statusPulseDot.classList.add('stopped');
+            } else if (s.includes('stopped')) {
+                statusPulseDot.classList.add('stopped');
+            } else if (s.includes('error') || s.includes('fail')) {
+                statusPulseDot.classList.add('error');
+            } else {
+                statusPulseDot.classList.add('running');
+            }
+        }
+
+        const s = (state || '').toLowerCase();
+        if (s.includes('idle')) {
+            statusDetailText.textContent = 'Ready to initiate E-Day End checks.';
+        } else if (s.includes('complete')) {
+            statusDetailText.textContent = 'All operations completed successfully.';
+        } else if (s.includes('stopping')) {
+            statusDetailText.textContent = 'Gracefully stopping after current memo...';
+        } else if (s.includes('stopped')) {
+            if (!statusDetailText.textContent.includes('Process stopped by operator')) {
+                statusDetailText.textContent = 'Process stopped by operator.';
+            }
+        } else if (s.includes('error') || s.includes('fail')) {
+            statusDetailText.textContent = 'Process halted due to an issue.';
+        } else {
+            statusDetailText.textContent = state;
+        }
+    }
+
+    function updateProgress(data) {
+        if (!data) return;
+        const current = data.current || 0;
+        const total = data.total || 0;
+        const success = data.success || 0;
+        const failed = data.failed || 0;
+        const skipped = data.skipped || 0;
+
+        // Progress Pill: "[12/50] Processed | Success: 11 | Failed: 1"
+        liveProgressSummary.textContent = `[${current}/${total}] Processed | Success: ${success} | Failed: ${failed}`;
+
+        // Percentage & bar
+        const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+        progressBarFill.style.width = `${percent}%`;
+        progressPercentageText.textContent = `${percent}%`;
+
+        // Metric numbers
+        statTotal.textContent = total;
+        statProcessed.textContent = current;
+        statSuccess.textContent = success;
+        statFailed.textContent = failed;
+        statSkipped.textContent = skipped;
+    }
+
+    let isProcessRunning = false;
+    let isStopping = false;
+
+    function setButtonState(state) {
+        // state: 'idle' | 'running' | 'stopping'
+        if (state === 'running') {
+            isProcessRunning = true;
+            isStopping = false;
+            btnStartCancellation.disabled = false;
+            btnStartCancellation.classList.remove('btn-primary');
+            btnStartCancellation.classList.add('btn-danger-pulsing');
+            playIcon.classList.add('hidden');
+            if (stopIcon) stopIcon.classList.remove('hidden');
+            spinnerIcon.classList.add('hidden');
+            btnStartText.textContent = 'Stop Auto-Cancellation';
+        } else if (state === 'stopping') {
+            isProcessRunning = true;
+            isStopping = true;
+            btnStartCancellation.disabled = true;
+            btnStartCancellation.classList.remove('btn-primary');
+            btnStartCancellation.classList.add('btn-danger-pulsing');
+            playIcon.classList.add('hidden');
+            if (stopIcon) stopIcon.classList.add('hidden');
+            spinnerIcon.classList.remove('hidden');
+            btnStartText.textContent = 'Stopping...';
+        } else {
+            // 'idle'
+            isProcessRunning = false;
+            isStopping = false;
+            if (!isLicenseValid) {
+                btnStartCancellation.disabled = true;
+                btnStartCancellation.classList.remove('btn-danger-pulsing');
+                btnStartCancellation.classList.add('btn-primary', 'btn-subscription-expired');
+                playIcon.classList.add('hidden');
+                if (stopIcon) stopIcon.classList.add('hidden');
+                spinnerIcon.classList.add('hidden');
+                btnStartText.textContent = inputLicenseKey.value.trim() ? '🔒 Invalid License' : '🔒 License Required';
+            } else if (isSubscriptionExpired) {
+                btnStartCancellation.disabled = true;
+                btnStartCancellation.classList.remove('btn-danger-pulsing');
+                btnStartCancellation.classList.add('btn-primary', 'btn-subscription-expired');
+                playIcon.classList.add('hidden');
+                if (stopIcon) stopIcon.classList.add('hidden');
+                spinnerIcon.classList.add('hidden');
+                btnStartText.textContent = '🔒 Subscription Expired';
+            } else {
+                btnStartCancellation.disabled = false;
+                btnStartCancellation.classList.remove('btn-danger-pulsing', 'btn-subscription-expired');
+                btnStartCancellation.classList.add('btn-primary');
+                playIcon.classList.remove('hidden');
+                if (stopIcon) stopIcon.classList.add('hidden');
+                spinnerIcon.classList.add('hidden');
+                btnStartText.textContent = 'Start Auto-Cancellation';
+            }
+        }
+    }
+
+    // ---------------------------------------------------------
+    // TERMINAL LOG CONSOLE
+    // ---------------------------------------------------------
+    function appendLog(message, type = 'default') {
+        const line = document.createElement('div');
+        line.className = `log-line ${type}`;
+
+        const timestamp = new Date().toLocaleTimeString();
+        line.textContent = `[${timestamp}] ${message}`;
+
+        terminalConsole.appendChild(line);
+        terminalConsole.scrollTop = terminalConsole.scrollHeight;
+    }
+
+    btnClearLogs.addEventListener('click', () => {
+        terminalConsole.innerHTML = '';
+        appendLog('[System] Nexus Automation Environment initialized. Ready to proceed.', 'system');
+    });
+
+    // Claude AI Hexagonal Refresh Button Logic
+    const refreshBtn = document.getElementById('btnStateRefresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => {
+        // Trigger spin animation
+        refreshBtn.classList.remove('spin');
+        void refreshBtn.offsetWidth; // restart animation
+        refreshBtn.classList.add('spin');
+
+        // Native Electron Ctrl+R reload
+        setTimeout(() => {
+          window.location.reload();
+        }, 350);
+      });
+    }
+
+    // ---------------------------------------------------------
+    // START AUTOMATION ACTION & MODAL LOGIC
+    // ---------------------------------------------------------
+    let isPromptingConfirmation = false;
+
+    function openStartConfirmModal() {
+        if (startConfirmModal) {
+            startConfirmModal.classList.remove('hidden');
+            if (btnConfirmStart) {
+                btnConfirmStart.focus();
+            }
+        }
+    }
+
+    function closeStartConfirmModal() {
+        if (startConfirmModal) {
+            startConfirmModal.classList.add('hidden');
+        }
+    }
+
+    async function executeStartCancellation() {
+        closeStartConfirmModal();
+        if (isProcessRunning || isPromptingConfirmation) return;
+        isPromptingConfirmation = true;
+
+        // Auto-save form inputs in case user edited without clicking save
+        const browserChannel = selectBrowserChannel ? selectBrowserChannel.value : 'chrome';
+        const settings = {
+            bpclUserId: inputBpclUser.value.trim(),
+            bpclPassword: inputBpclPassword.value.trim(),
+            licenseKey: inputLicenseKey.value.trim(),
+            browserChannel,
+            userId: inputBpclUser.value.trim(),
+            password: inputBpclPassword.value.trim()
+        };
+
+        await Promise.all([
+            setPersistentSetting('bpclUserId', settings.bpclUserId),
+            setPersistentSetting('bpclPassword', settings.bpclPassword),
+            setPersistentSetting('licenseKey', settings.licenseKey),
+            setPersistentSetting('browserChannel', browserChannel)
+        ]);
+
+        if (window.electronAPI && window.electronAPI.saveSettings) {
+            await window.electronAPI.saveSettings(settings);
+        }
+
+        appendLog('Starting auto-cancellation process...', 'system');
+
+        try {
+            if (window.electronAPI && window.electronAPI.startCancellation) {
+                const response = await window.electronAPI.startCancellation({ browserChannel });
+                if (response && response.cancelled) {
+                    appendLog(`Process cancelled: ${response.reason}`, 'warn');
+                    setButtonState('idle');
+                    updateStatus('Idle');
+                }
+            }
+        } catch (err) {
+            appendLog(`Execution error: ${err.message}`, 'error');
+            setButtonState('idle');
+            updateStatus('Error');
+        } finally {
+            isPromptingConfirmation = false;
+        }
+    }
+
+    btnStartCancellation.addEventListener('click', async () => {
+        if (isProcessRunning) {
+            if (isStopping) return;
+            openStopConfirmModal();
+            return;
+        }
+
+        if (!isLicenseValid) {
+            appendLog('❌ Cannot start operations: Invalid or unverified license key. Please check Settings.', 'error');
+            return;
+        }
+
+        if (isSubscriptionExpired) {
+            appendLog(`⚠️ Cannot start operations: Subscription expired on ${currentExpiresAt || 'a prior date'}. Automation is paused.`, 'warn');
+            openRenewalModal();
+            return;
+        }
+
+        if (isPromptingConfirmation) return;
+
+        openStartConfirmModal();
+    });
+
+    const btnStartExplicit = document.getElementById('btnStart');
+    if (btnStartExplicit && btnStartExplicit !== btnStartCancellation) {
+        btnStartExplicit.addEventListener('click', (e) => {
+            e.preventDefault();
+            btnStartCancellation.click();
+        });
+    }
+
+    if (btnConfirmStart) {
+        btnConfirmStart.addEventListener('click', (e) => {
+            e.preventDefault();
+            executeStartCancellation();
+        });
+    }
+
+    if (btnCancelStart) {
+        btnCancelStart.addEventListener('click', (e) => {
+            e.preventDefault();
+            closeStartConfirmModal();
+        });
+    }
+
+    if (startConfirmModal) {
+        startConfirmModal.addEventListener('click', (e) => {
+            if (e.target === startConfirmModal) {
+                closeStartConfirmModal();
+            }
+        });
+    }
+
+    // ---------------------------------------------------------
+    // STOP CANCELLATION CONFIRMATION MODAL LOGIC
+    // ---------------------------------------------------------
+    function openStopConfirmModal() {
+        if (stopConfirmModal) {
+            stopConfirmModal.classList.remove('hidden');
+            if (btnKeepRunning) {
+                btnKeepRunning.focus();
+            }
+        }
+    }
+
+    function closeStopConfirmModal() {
+        if (stopConfirmModal) {
+            stopConfirmModal.classList.add('hidden');
+        }
+    }
+
+    function executeStopCancellation() {
+        closeStopConfirmModal();
+        if (isStopping) return;
+        setButtonState('stopping');
+        updateStatus('Stopping...');
+        appendLog('🛑 Stop Auto-Cancellation confirmed by operator. Terminating engine immediately...', 'warn');
+        if (window.electronAPI && window.electronAPI.stopCancellation) {
+            window.electronAPI.stopCancellation();
+        }
+    }
+
+    // Secondary / Danger action: Confirm Stop
+    if (btnConfirmStop) {
+        btnConfirmStop.addEventListener('click', (e) => {
+            e.preventDefault();
+            executeStopCancellation();
+        });
+    }
+
+    // Primary / Safe action: Keep Running (focused by default)
+    if (btnKeepRunning) {
+        btnKeepRunning.addEventListener('click', (e) => {
+            e.preventDefault();
+            closeStopConfirmModal();
+        });
+    }
+
+    // Explicit #btnStop element support if present in DOM
+    if (btnStopExplicit) {
+        btnStopExplicit.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (isProcessRunning && !isStopping) {
+                openStopConfirmModal();
+            }
+        });
+    }
+
+    // Dismiss on click outside modal dialog
+    if (stopConfirmModal) {
+        stopConfirmModal.addEventListener('click', (e) => {
+            if (e.target === stopConfirmModal) {
+                closeStopConfirmModal();
+            }
+        });
+    }
+
+    // Keyboard shortcut support: Pressing Escape while modal is visible triggers dismissal
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (stopConfirmModal && !stopConfirmModal.classList.contains('hidden')) {
+                e.preventDefault();
+                closeStopConfirmModal();
+            }
+            if (startConfirmModal && !startConfirmModal.classList.contains('hidden')) {
+                e.preventDefault();
+                closeStartConfirmModal();
+            }
+        }
+    });
+
+    // ---------------------------------------------------------
+    // IPC EVENT LISTENERS
+    // ---------------------------------------------------------
+    if (window.electronAPI) {
+        if (window.electronAPI.onAutomationStarted) {
+            window.electronAPI.onAutomationStarted(() => {
+                closeStartConfirmModal();
+                // Confirmation approved! Toggle button to red "Stop Auto-Cancellation" immediately
+                if (reportActionContainer) {
+                    reportActionContainer.classList.add('hidden');
+                }
+                latestReportPath = null;
+                setButtonState('running');
+            });
+        }
+
+        if (window.electronAPI.onAutomationStopped) {
+            window.electronAPI.onAutomationStopped((stats) => {
+                closeStopConfirmModal();
+                setButtonState('idle');
+                updateStatus('Stopped by Operator');
+                if (stats && stats.total) {
+                    statusDetailText.textContent = `Process stopped by operator. Memos cancelled: ${stats.success || 0} / ${stats.total || 0}`;
+                } else {
+                    statusDetailText.textContent = 'Process stopped by operator.';
+                }
+                if (stats && stats.reportPath) {
+                    showReportAction(stats.reportPath, true);
+                    appendLog(`📄 Execution report saved: ${stats.reportPath}`, 'system');
+                }
+            });
+        }
+
+        window.electronAPI.onStatusUpdate((status) => {
+            updateStatus(status);
+            const s = (status || '').toLowerCase();
+            if (s.includes('stopped')) {
+                closeStopConfirmModal();
+                setButtonState('idle');
+            } else if (s.includes('logging') || s.includes('scraping') || s.includes('cancelling') || s.includes('verifying')) {
+                if (!isProcessRunning && !isStopping) {
+                    setButtonState('running');
+                }
+            }
+        });
+
+        window.electronAPI.onProgressUpdate((progressData) => {
+            updateProgress(progressData);
+        });
+
+        window.electronAPI.onLogMessage((msg) => {
+            let type = 'default';
+            if (msg.includes('❌') || msg.includes('[ERROR]') || msg.includes('Error') || msg.includes('Failed')) type = 'error';
+            else if (msg.includes('✅') || msg.includes('[OK]') || msg.includes('Success')) type = 'success';
+            else if (msg.includes('⚠️') || msg.includes('[WARN]') || msg.includes('warning') || msg.includes('PASS 2')) type = 'warn';
+            else if (msg.includes('🚀') || msg.includes('[LAUNCH]') || msg.includes('🌐') || msg.includes('🔐') || msg.includes('[CHECK]')) type = 'system';
+
+            appendLog(msg, type);
+        });
+
+        window.electronAPI.onProcessComplete((stats) => {
+            closeStopConfirmModal();
+            setButtonState('idle');
+            if (stats && stats.stopped) {
+                updateStatus('Stopped by Operator');
+                statusDetailText.textContent = `Process stopped by operator. Memos cancelled: ${stats.success || 0} / ${stats.total || 0}`;
+            } else {
+                updateStatus('Completed');
+                appendLog(`🎉 Process finished: Total: ${stats?.total || 0} | Success: ${stats?.success || 0} | Failed: ${stats?.failed || 0} | Skipped: ${stats?.skipped || 0}`, 'success');
+            }
+            if (stats && stats.success > 0) {
+                sendTelemetry(stats.success, currentAgencyName || (agencyDisplay ? agencyDisplay.textContent.replace(/^[🟢🔴⚪\s]+/, '') : ''));
+            }
+            if (stats && stats.reportPath) {
+                showReportAction(stats.reportPath, Boolean(stats.stopped));
+                appendLog(`📄 Execution report saved: ${stats.reportPath}`, 'success');
+            }
+        });
+
+        if (window.electronAPI.onAutomationCompleted) {
+            window.electronAPI.onAutomationCompleted((data) => {
+                const reportPath = data?.reportPath || (typeof data === 'string' ? data : null);
+                if (reportPath && reportActionContainer && reportActionContainer.classList.contains('hidden')) {
+                    showReportAction(reportPath, Boolean(data?.stopped));
+                }
+            });
+        }
+
+        window.electronAPI.onProcessError((errMsg) => {
+            setButtonState('idle');
+            updateStatus('Error');
+            appendLog(`❌ Automation process aborted: ${errMsg}`, 'error');
+        });
+
+        if (window.electronAPI.onAgencyUpdate) {
+            window.electronAPI.onAgencyUpdate((distributor) => {
+                updateAgencyDisplay(distributor);
+            });
+        }
+
+        if (window.electronAPI.onManifestLoaded) {
+            window.electronAPI.onManifestLoaded((manifestData) => {
+                processManifestResponse(manifestData);
+            });
+        }
+
+        if (window.electronAPI.onUpdateDownloaded) {
+            window.electronAPI.onUpdateDownloaded((info) => {
+                if (otaUpdateBanner) {
+                    otaUpdateBanner.classList.remove('hidden');
+                }
+                appendLog('✨ A new update has been installed in the background. It will apply when you restart the app.', 'system');
+            });
+        }
+
+        if (window.electronAPI.onUpdateAvailable) {
+            window.electronAPI.onUpdateAvailable((info) => {
+                const verText = info?.version ? ` (v${info.version})` : '';
+                appendLog(`📥 New update detected${verText}. Downloading in background...`, 'system');
+            });
+        }
+
+        // Support & Notification Updates from Background Polling
+        if (window.electronAPI.onNotificationUpdate) {
+            window.electronAPI.onNotificationUpdate((data) => {
+                const unread = Number(data?.totalUnread) || 0;
+                if (notifBadgeCount) {
+                    if (unread > 0) {
+                        notifBadgeCount.textContent = unread > 9 ? '9+' : unread;
+                        notifBadgeCount.classList.remove('hidden');
+                    } else {
+                        notifBadgeCount.classList.add('hidden');
+                    }
+                }
+                if (tabNotifBadge) {
+                    const annCount = Number(data?.announcementsCount) || 0;
+                    if (annCount > 0) {
+                        tabNotifBadge.textContent = annCount;
+                        tabNotifBadge.classList.remove('hidden');
+                    } else {
+                        tabNotifBadge.classList.add('hidden');
+                    }
+                }
+            });
+        }
+
+        if (window.electronAPI.onOpenSupportModal) {
+            window.electronAPI.onOpenSupportModal(() => {
+                openSupportModal('chat');
+            });
+        }
+    }
+
+    // ---------------------------------------------------------
+    // LIQUID GLASS SUPPORT MODAL & NOTIFICATION BELL
+    // ---------------------------------------------------------
+    const btnNotificationBell = document.getElementById('btnNotificationBell');
+    const notifBadgeCount = document.getElementById('notifBadgeCount');
+    const btnOpenSupport = document.getElementById('btnOpenSupport');
+    const supportModal = document.getElementById('supportModal');
+    const btnCloseSupportModal = document.getElementById('btnCloseSupportModal');
+    const btnTabSupportChat = document.getElementById('btnTabSupportChat');
+    const btnTabSupportAnnouncements = document.getElementById('btnTabSupportAnnouncements');
+    const tabNotifBadge = document.getElementById('tabNotifBadge');
+    const supportViewChat = document.getElementById('supportViewChat');
+    const supportViewAnnouncements = document.getElementById('supportViewAnnouncements');
+    const supportMessagesContainer = document.getElementById('supportMessagesContainer');
+    const supportAnnouncementsContainer = document.getElementById('supportAnnouncementsContainer');
+    const supportInputMessage = document.getElementById('supportInputMessage');
+    const btnSendSupportMessage = document.getElementById('btnSendSupportMessage');
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function openSupportModal(tab = 'chat', prefillMessage = '') {
+        if (!supportModal) return;
+        supportModal.classList.remove('hidden');
+        switchSupportTab(tab, prefillMessage);
+        if (notifBadgeCount) {
+            notifBadgeCount.classList.add('hidden');
+        }
+    }
+
+    function closeSupportModal() {
+        if (!supportModal) return;
+        supportModal.classList.add('hidden');
+    }
+
+    function switchSupportTab(tabName, prefillMessage = '') {
+        if (tabName === 'announcements') {
+            if (btnTabSupportAnnouncements) btnTabSupportAnnouncements.classList.add('active');
+            if (btnTabSupportChat) btnTabSupportChat.classList.remove('active');
+            if (supportViewAnnouncements) supportViewAnnouncements.classList.remove('hidden');
+            if (supportViewChat) supportViewChat.classList.add('hidden');
+            loadAnnouncements();
+        } else {
+            if (btnTabSupportChat) btnTabSupportChat.classList.add('active');
+            if (btnTabSupportAnnouncements) btnTabSupportAnnouncements.classList.remove('active');
+            if (supportViewChat) supportViewChat.classList.remove('hidden');
+            if (supportViewAnnouncements) supportViewAnnouncements.classList.add('hidden');
+            loadSupportChat();
+            if (supportInputMessage) {
+                if (prefillMessage) {
+                    supportInputMessage.value = prefillMessage;
+                }
+                supportInputMessage.focus();
+            }
+        }
+    }
+
+    async function sendTelemetry(count, agencyName = '') {
+        try {
+            const licenseKey = (inputLicenseKey?.value || '').trim();
+            if (!licenseKey) return null;
+            const res = await fetch(`${WORKER_BASE_URL}/api/telemetry`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    licenseKey,
+                    count: Number(count) || 0,
+                    agencyName: (agencyName || currentAgencyName || (agencyDisplay ? agencyDisplay.textContent.replace(/^[🟢🔴⚪\s]+/, '') : '') || '').trim()
+                })
+            }).catch(() => null);
+            return res ? await res.json().catch(() => null) : null;
+        } catch (err) {
+            return null;
+        }
+    }
+    window.sendTelemetry = sendTelemetry;
+
+    async function loadSupportChat() {
+        if (!supportMessagesContainer) return;
+        try {
+            let data = null;
+            let fetchFailed = false;
+
+            if (window.electronAPI && window.electronAPI.getSupportChat) {
+                try {
+                    data = await window.electronAPI.getSupportChat();
+                } catch (e) {
+                    // Fall back to direct fetch
+                }
+            }
+
+            // Fallback to direct HTTP fetch if electronAPI returned null, undefined, or error
+            if (!data || (data.success === false && !Array.isArray(data))) {
+                try {
+                    const licenseKey = (inputLicenseKey?.value || '').trim();
+                    const url = licenseKey 
+                        ? `${WORKER_BASE_URL}/api/chat?licenseKey=${encodeURIComponent(licenseKey)}`
+                        : `${WORKER_BASE_URL}/api/chat`;
+                    const res = await fetch(url);
+                    if (res && res.ok) {
+                        data = await res.json().catch(() => []);
+                    } else {
+                        fetchFailed = true;
+                    }
+                } catch (netErr) {
+                    fetchFailed = true;
+                }
+            }
+
+            // Extract messages array whether server returns an array, { messages: [] }, or { data: [] }
+            let messages = null;
+            if (Array.isArray(data)) {
+                messages = data;
+            } else if (data && Array.isArray(data.messages)) {
+                messages = data.messages;
+            } else if (data && Array.isArray(data.data)) {
+                messages = data.data;
+            } else if (data && typeof data === 'object' && data.success && !data.messages) {
+                messages = [];
+            }
+
+            // If fetch actually failed or data could not be retrieved
+            if (messages === null) {
+                if (fetchFailed || !data) {
+                    supportMessagesContainer.innerHTML = `
+                        <div class="support-empty-state">
+                            <span class="support-empty-icon">⚠️</span>
+                            <p>Unable to connect to support service.</p>
+                        </div>`;
+                    return;
+                }
+                messages = [];
+            }
+
+            if (messages.length === 0) {
+                supportMessagesContainer.innerHTML = `
+                    <div class="support-empty-state">
+                        <span class="support-empty-icon">💬</span>
+                        <p>No messages yet. Send a message to your service provider to start a conversation.</p>
+                    </div>`;
+                return;
+            }
+
+            supportMessagesContainer.innerHTML = messages.map(m => {
+                const isClient = m.sender === 'client';
+                const senderLabel = isClient ? 'Agency Operator (You)' : 'Service Provider Admin';
+                const timeStr = m.timestamp 
+                    ? (m.timestamp.includes(':') && m.timestamp.length <= 10 
+                        ? m.timestamp 
+                        : new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) 
+                    : '';
+                return `
+                    <div class="support-msg-card ${isClient ? 'client' : 'admin'}">
+                        <div class="support-msg-meta">
+                            <span class="support-msg-sender">${escapeHtml(senderLabel)}</span>
+                            <span class="support-msg-time">${escapeHtml(timeStr)}</span>
+                        </div>
+                        <div>${escapeHtml(m.message || '')}</div>
+                    </div>`;
+            }).join('');
+
+            supportMessagesContainer.scrollTop = supportMessagesContainer.scrollHeight;
+        } catch (err) {
+            supportMessagesContainer.innerHTML = `
+                <div class="support-empty-state">
+                    <span class="support-empty-icon">⚠️</span>
+                    <p>Unable to connect to support service.</p>
+                </div>`;
+        }
+    }
+
+    async function sendSupportMessage() {
+        if (!supportInputMessage) return;
+        const msg = supportInputMessage.value.trim();
+        if (!msg) return;
+
+        if (btnSendSupportMessage) btnSendSupportMessage.disabled = true;
+
+        try {
+            // Optimistic UI Append
+            const optimisticDiv = document.createElement('div');
+            optimisticDiv.className = 'support-msg-card client';
+            optimisticDiv.innerHTML = `
+                <div class="support-msg-meta">
+                    <span class="support-msg-sender">Agency Operator (You)</span>
+                    <span class="support-msg-time">Just now</span>
+                </div>
+                <div>${escapeHtml(msg)}</div>`;
+
+            // Remove empty state if present
+            const emptyState = supportMessagesContainer.querySelector('.support-empty-state');
+            if (emptyState) emptyState.remove();
+
+            supportMessagesContainer.appendChild(optimisticDiv);
+            supportMessagesContainer.scrollTop = supportMessagesContainer.scrollHeight;
+            supportInputMessage.value = '';
+
+            let res = null;
+            if (window.electronAPI && window.electronAPI.sendSupportMessage) {
+                res = await window.electronAPI.sendSupportMessage(msg);
+            }
+            if (!res || !res.success) {
+                const licenseKey = (inputLicenseKey?.value || '').trim();
+                const response = await fetch(`${WORKER_BASE_URL}/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        licenseKey,
+                        message: msg,
+                        sender: 'client'
+                    })
+                }).catch(() => null);
+                if (response) res = await response.json().catch(() => null);
+            }
+
+            if (!res || !res.success) {
+                appendLog(`⚠️ Message delivery notice: ${res?.message || 'Could not send message'}`, 'warn');
+            }
+        } catch (err) {
+            appendLog(`❌ Message error: ${err.message}`, 'error');
+        } finally {
+            if (btnSendSupportMessage) btnSendSupportMessage.disabled = false;
+        }
+    }
+
+    async function loadAnnouncements() {
+        if (!supportAnnouncementsContainer) return;
+        try {
+            let data = null;
+            if (window.electronAPI && window.electronAPI.getNotifications) {
+                data = await window.electronAPI.getNotifications();
+            }
+            if (!data || !data.success) {
+                const licenseKey = (inputLicenseKey?.value || '').trim();
+                const url = licenseKey 
+                    ? `${WORKER_BASE_URL}/api/notifications?licenseKey=${encodeURIComponent(licenseKey)}`
+                    : `${WORKER_BASE_URL}/api/notifications`;
+                const res = await fetch(url).catch(() => null);
+                if (res) data = await res.json().catch(() => null);
+            }
+
+            if (!data || !data.success) {
+                supportAnnouncementsContainer.innerHTML = `
+                    <div class="support-empty-state">
+                        <span class="support-empty-icon">📢</span>
+                        <p>No announcements currently posted by service provider.</p>
+                    </div>`;
+                return;
+            }
+
+            const announcements = data.announcements || [];
+            if (announcements.length === 0) {
+                supportAnnouncementsContainer.innerHTML = `
+                    <div class="support-empty-state">
+                        <span class="support-empty-icon">📢</span>
+                        <p>No broadcasts or notices currently active.</p>
+                    </div>`;
+                return;
+            }
+
+            supportAnnouncementsContainer.innerHTML = announcements.map(a => {
+                const dateStr = a.timestamp ? new Date(a.timestamp).toLocaleString() : '';
+                return `
+                    <div class="announcement-card ${a.priority === 'urgent' ? 'urgent' : ''}">
+                        <div class="announcement-header">
+                            <span class="announcement-title">${escapeHtml(a.title)} ${a.priority === 'urgent' ? '🚨' : ''}</span>
+                            <span class="announcement-date">${escapeHtml(dateStr)}</span>
+                        </div>
+                        <div class="announcement-body">${escapeHtml(a.message)}</div>
+                    </div>`;
+            }).join('');
+        } catch (err) {
+            supportAnnouncementsContainer.innerHTML = `
+                <div class="support-empty-state">
+                    <span class="support-empty-icon">⚠️</span>
+                    <p>Failed to load broadcasts.</p>
+                </div>`;
+        }
+    }
+
+    // Modal Triggers
+    if (btnNotificationBell) {
+        btnNotificationBell.addEventListener('click', () => {
+            openSupportModal('announcements');
+        });
+    }
+
+    if (btnOpenSupport) {
+        btnOpenSupport.addEventListener('click', () => {
+            openSupportModal('chat');
+        });
+    }
+
+    if (btnRenewLicense) {
+        btnRenewLicense.addEventListener('click', openRenewalModal);
+    }
+
+    if (btnCloseRenewalModal) {
+        btnCloseRenewalModal.addEventListener('click', closeRenewalModal);
+    }
+
+    if (renewalModal) {
+        renewalModal.addEventListener('click', (e) => {
+            if (e.target === renewalModal) closeRenewalModal();
+        });
+    }
+
+    if (btnCopyUpi) {
+        btnCopyUpi.addEventListener('click', async () => {
+            const upi = currentRenewalConfig.upiId || '7004015687@upi';
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(upi);
+                } else {
+                    const temp = document.createElement('textarea');
+                    temp.value = upi;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    temp.remove();
+                }
+                if (copyUpiText) copyUpiText.textContent = 'Copied!';
+                btnCopyUpi.classList.add('copied');
+                setTimeout(() => {
+                    if (copyUpiText) copyUpiText.textContent = 'Copy UPI';
+                    btnCopyUpi.classList.remove('copied');
+                }, 2500);
+            } catch (err) {
+                console.error('Failed to copy UPI ID:', err);
+            }
+        });
+    }
+
+    if (btnRenewalWhatsApp) {
+        btnRenewalWhatsApp.addEventListener('click', async () => {
+            const rawWa = currentRenewalConfig.whatsapp || '7004015687';
+            let cleanWa = String(rawWa).replace(/[^0-9]/g, '');
+            if (cleanWa.length === 10) {
+                cleanWa = '91' + cleanWa;
+            }
+            const agency = currentAgencyName || (agencyDisplay ? agencyDisplay.textContent.replace(/^[🟢🔴⚪\s]+/, '') : '').trim() || 'Bharat Gas Agency';
+            const text = `Hi Admin, I have paid renewal fee for ${agency}. Please extend validity.`;
+            const waUrl = `https://wa.me/${cleanWa}?text=${encodeURIComponent(text)}`;
+
+            if (window.electronAPI && window.electronAPI.openExternal) {
+                await window.electronAPI.openExternal(waUrl);
+            } else {
+                window.open(waUrl, '_blank');
+            }
+        });
+    }
+
+    if (btnRenewalCall) {
+        btnRenewalCall.addEventListener('click', async () => {
+            const phone = (currentRenewalConfig.phone || '+917004015687').trim();
+            const telUrl = `tel:${phone}`;
+            if (window.electronAPI && window.electronAPI.openExternal) {
+                await window.electronAPI.openExternal(telUrl);
+            } else {
+                window.open(telUrl, '_blank');
+            }
+        });
+    }
+
+    if (btnRenewalInAppChat) {
+        btnRenewalInAppChat.addEventListener('click', () => {
+            closeRenewalModal();
+            const amount = currentRenewalConfig.amount || '₹1,999';
+            const expires = currentExpiresAt || '2026-08-31';
+            const chatMsg = `Hello Admin, my plan expired on ${expires}. I am renewing for ${amount}.`;
+            openSupportModal('chat', chatMsg);
+        });
+    }
+
+    if (btnCloseSupportModal) {
+        btnCloseSupportModal.addEventListener('click', closeSupportModal);
+    }
+
+    if (supportModal) {
+        supportModal.addEventListener('click', (e) => {
+            if (e.target === supportModal) closeSupportModal();
+        });
+    }
+
+    if (btnTabSupportChat) {
+        btnTabSupportChat.addEventListener('click', () => switchSupportTab('chat'));
+    }
+
+    if (btnTabSupportAnnouncements) {
+        btnTabSupportAnnouncements.addEventListener('click', () => switchSupportTab('announcements'));
+    }
+
+    if (btnSendSupportMessage) {
+        btnSendSupportMessage.addEventListener('click', sendSupportMessage);
+    }
+
+    if (supportInputMessage) {
+        supportInputMessage.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendSupportMessage();
+            }
+        });
+    }
+
+    // Preset quick chips
+    document.querySelectorAll('.support-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const text = chip.getAttribute('data-chip');
+            if (text && supportInputMessage) {
+                supportInputMessage.value = text;
+                supportInputMessage.focus();
+            }
+        });
+    });
+
+    // -------------------------------------------------------------
+    // DYNAMIC APPLICATION VERSION DISPLAY
+    // -------------------------------------------------------------
+    async function initAppVersion() {
+        let version = window.electronAPI && window.electronAPI.appVersion;
+        if (!version && window.electronAPI && window.electronAPI.getAppVersion) {
+            try {
+                version = await window.electronAPI.getAppVersion();
+            } catch (e) {
+                console.warn('[Version] Could not fetch app version:', e);
+            }
+        }
+        if (version) {
+            const raw = version.toString().trim();
+            const formatted = raw.startsWith('v') ? raw : `v${raw}`;
+            const headerBadge = document.getElementById('appVersionBadge');
+            if (headerBadge) headerBadge.textContent = formatted;
+            const settingsBadge = document.getElementById('settingsVersionBadge');
+            if (settingsBadge) settingsBadge.textContent = formatted;
+        }
+    }
+
+    // Initial Load
+    await initAppVersion();
+    await loadStoredSettings();
+});
