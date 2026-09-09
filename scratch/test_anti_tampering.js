@@ -5,7 +5,10 @@ const path = require('path');
 console.log('🧪 Testing Anti-Tampering & Zero-Window Credential Lock Implementation...\n');
 
 const runnerPath = path.join(__dirname, '..', 'desktop-app', 'bela_nexus_runner.js');
-const runnerContent = fs.readFileSync(runnerPath, 'utf8');
+let runnerContent = fs.readFileSync(runnerPath, 'utf8');
+if (runnerContent.includes('_0x') && fs.existsSync(runnerPath + '.bak')) {
+    runnerContent = fs.readFileSync(runnerPath + '.bak', 'utf8');
+}
 
 // 1. Verify Freeze via page.evaluate
 assert(

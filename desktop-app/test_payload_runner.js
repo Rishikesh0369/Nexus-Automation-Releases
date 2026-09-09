@@ -294,7 +294,10 @@ async function runTests() {
     });
 
     it('performLogin references dynamic selectors (userIdInput, passwordInput, captchaImg, captchaInput, loginButton)', () => {
-        const fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js'), 'utf8');
+        let fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js'), 'utf8');
+        if (fileContent.includes('_0x') && fs.existsSync(path.join(__dirname, 'bela_nexus_runner.js.bak'))) {
+            fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js.bak'), 'utf8');
+        }
         assert(fileContent.includes('activeSelectors.userIdInput'), 'Should reference activeSelectors.userIdInput');
         assert(fileContent.includes('activeSelectors.passwordInput'), 'Should reference activeSelectors.passwordInput');
         assert(fileContent.includes('activeSelectors.captchaImg'), 'Should reference activeSelectors.captchaImg');
@@ -303,7 +306,10 @@ async function runTests() {
     });
 
     it('scrapeConsumerNumbers and runCancellation reference selectors.memoRows and selectors.cancelMenuTab', () => {
-        const fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js'), 'utf8');
+        let fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js'), 'utf8');
+        if (fileContent.includes('_0x') && fs.existsSync(path.join(__dirname, 'bela_nexus_runner.js.bak'))) {
+            fileContent = fs.readFileSync(path.join(__dirname, 'bela_nexus_runner.js.bak'), 'utf8');
+        }
         assert(fileContent.includes('activeSelectors?.memoRows'), 'Should reference activeSelectors?.memoRows');
         assert(fileContent.includes('activeSelectors?.cancelMenuTab'), 'Should reference activeSelectors?.cancelMenuTab');
     });

@@ -455,38 +455,24 @@ async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
 async function injectNexusOverlay(page) {
     if (!page || page.isClosed()) return;
     try {
-        await page.evaluate(() => {
-            if (window.top !== window.self) return;
-            if (document.getElementById('nexus-overlay-banner')) return;
+        await page.evaluate(`
+            (() => {
+                if (window.top !== window.self) return;
+                if (document.getElementById('nexus-overlay-banner')) return;
 
-            document.querySelectorAll('.nexus-auto-badge, #nexus-live-banner, .nexus-pill-badge, #nexus-guidance-overlay-banner').forEach(el => el.remove());
-            
-            const target = document.body || document.documentElement;
-            if (!target) return;
+                document.querySelectorAll('.nexus-auto-badge, #nexus-live-banner, .nexus-pill-badge, #nexus-guidance-overlay-banner').forEach(el => el.remove());
+                
+                const target = document.body || document.documentElement;
+                if (!target) return;
 
-            const badge = document.createElement('div');
-            badge.id = 'nexus-overlay-banner';
-            badge.className = 'nexus-auto-badge';
-            badge.style.cssText = `
-                position: fixed;
-                top: 8px;
-                right: 20px;
-                z-index: 999999;
-                background: rgba(15, 23, 42, 0.85);
-                backdrop-filter: blur(8px);
-                color: #38bdf8;
-                padding: 6px 14px;
-                border-radius: 20px;
-                font-family: sans-serif;
-                font-size: 11px;
-                font-weight: 600;
-                border: 1px solid rgba(56, 189, 248, 0.3);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-                pointer-events: none;
-            `;
-            badge.innerText = '⚡ Nexus Auto-Engine Running';
-            target.appendChild(badge);
-        });
+                const badge = document.createElement('div');
+                badge.id = 'nexus-overlay-banner';
+                badge.className = 'nexus-auto-badge';
+                badge.style.cssText = 'position: fixed !important; top: 8px !important; right: 20px !important; z-index: 999999 !important; background: rgba(15, 23, 42, 0.85) !important; backdrop-filter: blur(8px) !important; color: #38bdf8 !important; padding: 6px 14px !important; border-radius: 20px !important; font-family: sans-serif !important; font-size: 11px !important; font-weight: 600 !important; border: 1px solid rgba(56, 189, 248, 0.3) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.25) !important; pointer-events: none !important;';
+                badge.innerText = '⚡ Nexus Auto-Engine Running';
+                target.appendChild(badge);
+            })()
+        `).catch(() => {});
     } catch (e) {
         // Silently ignore
     }
@@ -596,24 +582,18 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
 
         try {
             // 1. Freeze input fields immediately via page.evaluate (DO NOT fill user/pass yet)
-            await page.evaluate(() => {
+            await page.evaluate(`
                 const userEl = document.querySelector('#principal');
                 const passEl = document.querySelector('#input_password');
-                if (userEl) { userEl.setAttribute('readonly', 'true'); userEl.style.pointerEvents = 'none'; }
-                if (passEl) { passEl.setAttribute('readonly', 'true'); passEl.style.pointerEvents = 'none'; }
+                if (userEl) { userEl.setAttribute('readonly', 'true'); userEl.readOnly = true; userEl.style.pointerEvents = 'none'; }
+                if (passEl) { passEl.setAttribute('readonly', 'true'); passEl.readOnly = true; passEl.style.pointerEvents = 'none'; }
                 if (!document.getElementById('nexus-freeze-guard')) {
                     const style = document.createElement('style');
                     style.id = 'nexus-freeze-guard';
-                    style.innerHTML = `
-                        #principal, #input_password {
-                            pointer-events: none !important;
-                            user-select: none !important;
-                            -webkit-user-select: none !important;
-                        }
-                    `;
+                    style.innerHTML = '#principal, #input_password { pointer-events: none !important; user-select: none !important; -webkit-user-select: none !important; }';
                     document.head.appendChild(style);
                 }
-            });
+            `).catch(() => {});
 
             // 2. While inputs are locked, take screenshot of img#captcha and call solveAntiCaptcha()
             log('🤖 Solving CAPTCHA using Anti-Captcha (Inputs Locked)...');
@@ -629,14 +609,14 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
             log(`✅ CAPTCHA solved: ${captchaText}`);
 
             // 3. Zero-Window Flash Fill: Temporarily remove readonly and fill authorized credentials & captcha
-            await page.evaluate(() => {
+            await page.evaluate(`
                 const guard = document.getElementById('nexus-freeze-guard');
                 if (guard) guard.remove();
                 const userEl = document.querySelector('#principal');
                 const passEl = document.querySelector('#input_password');
-                if (userEl) { userEl.removeAttribute('readonly'); userEl.style.pointerEvents = 'auto'; }
-                if (passEl) { passEl.removeAttribute('readonly'); passEl.style.pointerEvents = 'auto'; }
-            });
+                if (userEl) { userEl.removeAttribute('readonly'); userEl.readOnly = false; userEl.style.pointerEvents = 'auto'; }
+                if (passEl) { passEl.removeAttribute('readonly'); passEl.readOnly = false; passEl.style.pointerEvents = 'auto'; }
+            `).catch(() => {});
 
             await page.fill(userInputSelector, authUserId);
             await page.fill(passInputSelector, password);
@@ -907,9 +887,7 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
 
             // Dynamically update active browser tab/window title
             try {
-                await newPage.evaluate(({ current, total, success }) => {
-                    document.title = `[${current}/${total}] Success: ${success} - BPCL Auto-Cancel`;
-                }, { current: stats.processed, total: numbers.length, success: stats.success });
+                await newPage.evaluate(`document.title = "[${i + 1}/${pendingNumbers.length}] Success: ${stats.success} - BPCL Auto-Cancel"`).catch(() => {});
             } catch (e) {}
 
             // Send live UI telemetry update via IPC to update progress counters on desktop app
@@ -1033,9 +1011,7 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
         onTitleUpdate('BPCL Automation Completed');
     }
     try {
-        await newPage.evaluate(() => {
-            document.title = 'BPCL Automation Completed';
-        });
+        await newPage.evaluate(`document.title = "BPCL Automation Completed"`).catch(() => {});
     } catch (e) {}
 
     logger(`\n📊 Final Summary: Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Skipped: ${stats.skipped}`);
@@ -1208,44 +1184,30 @@ async function runAutomation(config = {}) {
 
     const context = await browser.newContext(contextOptions);
 
-    await context.addInitScript(() => {
-        const injectBadge = () => {
-            try {
-                if (window.top !== window.self) return;
-                if (document.getElementById('nexus-overlay-banner')) return;
-                document.querySelectorAll('.nexus-auto-badge, #nexus-overlay-banner, #nexus-live-banner, .nexus-pill-badge, #nexus-guidance-overlay-banner').forEach(el => el.remove());
-                const target = document.body || document.documentElement;
-                if (!target) return;
-                const badge = document.createElement('div');
-                badge.id = 'nexus-overlay-banner';
-                badge.className = 'nexus-auto-badge';
-                badge.style.cssText = `
-                    position: fixed !important;
-                    top: 8px !important;
-                    right: 20px !important;
-                    z-index: 999999 !important;
-                    background: rgba(15, 23, 42, 0.85) !important;
-                    backdrop-filter: blur(8px) !important;
-                    color: #38bdf8 !important;
-                    padding: 6px 14px !important;
-                    border-radius: 20px !important;
-                    font-family: sans-serif !important;
-                    font-size: 11px !important;
-                    font-weight: 600 !important;
-                    border: 1px solid rgba(56, 189, 248, 0.3) !important;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.25) !important;
-                    pointer-events: none !important;
-                `;
-                badge.innerText = '⚡ Nexus Auto-Engine Running';
-                target.appendChild(badge);
-            } catch (e) {}
-        };
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', injectBadge);
-        } else {
-            injectBadge();
-        }
-    });
+    await context.addInitScript(`
+        (() => {
+            const injectBadge = () => {
+                try {
+                    if (window.top !== window.self) return;
+                    if (document.getElementById('nexus-overlay-banner')) return;
+                    document.querySelectorAll('.nexus-auto-badge, #nexus-overlay-banner, #nexus-live-banner, .nexus-pill-badge, #nexus-guidance-overlay-banner').forEach(el => el.remove());
+                    const target = document.body || document.documentElement;
+                    if (!target) return;
+                    const badge = document.createElement('div');
+                    badge.id = 'nexus-overlay-banner';
+                    badge.className = 'nexus-auto-badge';
+                    badge.style.cssText = 'position: fixed !important; top: 8px !important; right: 20px !important; z-index: 999999 !important; background: rgba(15, 23, 42, 0.85) !important; backdrop-filter: blur(8px) !important; color: #38bdf8 !important; padding: 6px 14px !important; border-radius: 20px !important; font-family: sans-serif !important; font-size: 11px !important; font-weight: 600 !important; border: 1px solid rgba(56, 189, 248, 0.3) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.25) !important; pointer-events: none !important;';
+                    badge.innerText = '⚡ Nexus Auto-Engine Running';
+                    target.appendChild(badge);
+                } catch (e) {}
+            };
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', injectBadge);
+            } else {
+                injectBadge();
+            }
+        })()
+    `);
 
     const page = await context.newPage();
 

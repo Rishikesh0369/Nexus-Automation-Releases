@@ -45,19 +45,20 @@ const OBFUSCATION_OPTIONS = {
  * @returns {string[]}
  */
 function findCandidatePaths(filename) {
-    const directPath = path.isAbsolute(filename) ? filename : path.resolve(filename);
-    if (fs.existsSync(directPath)) {
-        return [directPath];
+    if (path.isAbsolute(filename)) {
+        return fs.existsSync(filename) ? [filename] : [];
     }
 
     const localPath = path.resolve(__dirname, filename);
+    const directPath = path.resolve(filename);
     const parentPath = path.resolve(__dirname, '..', filename);
     const candidates = [];
 
     if (fs.existsSync(localPath)) {
         candidates.push(localPath);
-    }
-    if (fs.existsSync(parentPath) && parentPath !== localPath) {
+    } else if (fs.existsSync(directPath)) {
+        candidates.push(directPath);
+    } else if (fs.existsSync(parentPath)) {
         candidates.push(parentPath);
     }
 

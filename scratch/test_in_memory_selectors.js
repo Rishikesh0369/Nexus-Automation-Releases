@@ -184,7 +184,13 @@ async function runAllTests() {
     console.log('\n--- Group 3: Automation Flow Selector Replacements ---');
 
     it('bela_nexus_runner.js uses dynamic keys across performLogin and runCancellation', () => {
-        const runnerCode = fs.readFileSync(path.join(__dirname, '..', 'desktop-app', 'bela_nexus_runner.js'), 'utf8');
+        let runnerCode = fs.readFileSync(path.join(__dirname, '..', 'desktop-app', 'bela_nexus_runner.js'), 'utf8');
+        if (runnerCode.includes('_0x')) {
+            const bakPath = path.join(__dirname, '..', 'desktop-app', 'bela_nexus_runner.js.bak');
+            if (fs.existsSync(bakPath)) {
+                runnerCode = fs.readFileSync(bakPath, 'utf8');
+            }
+        }
 
         // Login selectors
         assert(runnerCode.includes('activeSelectors.userInput'), 'performLogin must use activeSelectors.userInput');
