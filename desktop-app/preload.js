@@ -12,6 +12,7 @@ const electronAPI = {
 
     // Settings API
     getSettings: () => ipcRenderer.invoke('get-settings'),
+    getCredentials: () => ipcRenderer.invoke('get-credentials'),
     saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
     clearSettings: () => ipcRenderer.invoke('clear-settings'),
 
@@ -56,6 +57,7 @@ const electronAPI = {
         }
     })(),
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
+    fetchCloudflareQr: () => ipcRenderer.invoke('fetch-cloudflare-qr'),
     onAgencyUpdate: (callback) => {
         const listener = (_event, value) => callback(value);
         ipcRenderer.on('agency-update', listener);
@@ -88,11 +90,17 @@ const electronAPI = {
         ipcRenderer.on('update-available', listener);
         return () => ipcRenderer.removeListener('update-available', listener);
     },
+    onUpdateProgress: (callback) => {
+        const listener = (_event, value) => callback(value);
+        ipcRenderer.on('update-progress', listener);
+        return () => ipcRenderer.removeListener('update-progress', listener);
+    },
     onUpdateDownloaded: (callback) => {
         const listener = (_event, value) => callback(value);
         ipcRenderer.on('update-downloaded', listener);
         return () => ipcRenderer.removeListener('update-downloaded', listener);
     },
+    applyUpdateAndReopen: () => ipcRenderer.send('apply-update-and-reopen'),
     restartApp: () => ipcRenderer.invoke('restart-app'),
 
     // Execution Report Launch

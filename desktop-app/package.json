@@ -1,16 +1,23 @@
 {
   "name": "nexus-automation",
-  "version": "1.1.0",
+  "version": "1.1.7",
   "description": "Nexus Automation - Cash Memo Auto-Cancellation Desktop Application",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rishikesh0369/Nexus-Automation-Releases.git"
+  },
   "scripts": {
     "start": "electron .",
     "obfuscate": "node obfuscate.js",
     "obfuscate:all": "node obfuscate.js --all",
     "obfuscate:restore": "node obfuscate.js --restore",
-    "dist": "electron-builder",
-    "build": "electron-builder",
-    "release": "electron-builder --publish always"
+    "obfuscate:protected": "node build_protected.js",
+    "dist:win": "node build_protected.js && electron-builder --win --x64 --config electron-builder.protected.json",
+    "build:local": "node archive_build.js && node obfuscate.js && electron-builder --win",
+    "dist": "node archive_build.js && node obfuscate.js && electron-builder",
+    "build": "node archive_build.js && node obfuscate.js && electron-builder",
+    "release": "node archive_build.js && node obfuscate.js && electron-builder --publish always"
   },
   "keywords": [
     "electron",
@@ -24,6 +31,7 @@
     "@antiadmin/anticaptchaofficial": "^1.0.56",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.3.0",
+    "exceljs": "^4.4.0",
     "playwright": "^1.50.0"
   },
   "devDependencies": {
@@ -38,6 +46,28 @@
     "directories": {
       "output": "release"
     },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "bela_nexus_runner.js",
+      "scrapers/**/*",
+      "index.html",
+      "toast.html",
+      "styles.css",
+      "package.json",
+      "assets/**/*",
+      "!**/*.bak",
+      "!**/*.log",
+      "!nexus_logs/**/*",
+      "!.env*",
+      "!electron-builder.env*",
+      "!test_*",
+      "!obfuscate.js",
+      "!archive_build.js",
+      "!automationRunner.js",
+      "!eng.traineddata"
+    ],
     "extraResources": [
       {
         "from": "assets",
@@ -47,7 +77,7 @@
     "publish": {
       "provider": "github",
       "owner": "Rishikesh0369",
-      "repo": "bharat-gas-nexus-releases"
+      "repo": "Nexus-Automation-Releases"
     },
     "win": {
       "target": [
@@ -57,8 +87,8 @@
       "artifactName": "Nexus-Automation-Setup-${version}.${ext}"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
       "artifactName": "Nexus-Automation-Setup-${version}.${ext}"
     }
   }

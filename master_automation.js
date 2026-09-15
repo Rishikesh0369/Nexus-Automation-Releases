@@ -330,7 +330,10 @@ async function runCancellation(page, numbers) {
             '--disable-blink-features=AutomationControlled',
             '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding'
+            '--disable-renderer-backgrounding',
+            '--disable-features=CalculateNativeWinOcclusion',
+            '--no-sandbox',
+            '--disable-dev-shm-usage'
         ]
     });
     let contextOptions = { viewport: null };

@@ -4,9 +4,67 @@
  * Remote Automation Payload & Dynamic In-Memory Selectors
  */
 
-const { chromium } = require('playwright');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
+let app;
+try {
+    ({ app } = require('electron'));
+} catch (_) {}
+const { chromium } = require('playwright');
+
+const fallbackUserDataDir = (app && typeof app.getPath === 'function')
+    ? app.getPath('userData')
+    : path.join(process.env.APPDATA || process.env.USERPROFILE || process.env.HOME || __dirname, '.nexus-automation');
+
+const logDirectory = path.join(fallbackUserDataDir, 'nexus_logs');
+if (!fs.existsSync(logDirectory)) {
+    fs.mkdirSync(logDirectory, { recursive: true });
+}
+const debugLogFile = path.join(logDirectory, 'engine_debug.log');
+
+/**
+ * Strips internal development filesystem paths, user directories, and file URLs
+ * to ensure that internal development directory paths (e.g., C:\Users\...)
+ * are completely stripped from any error message presented to the UI or logs.
+ */
+function sanitizeErrorMessage(msg) {
+    if (!msg || typeof msg !== 'string') return '';
+    return msg
+        .replace(/[A-Za-z]:\\[Uu]sers\\[^\\]+\\[^\s:)]+/gi, '[internal_path]')
+        .replace(/[A-Za-z]:\\[^\s:)]+/g, '[internal_path]')
+        .replace(/\/(?:Users|home)\/[^\s:)]+/g, '[internal_path]')
+        .replace(/file:\/\/\/[^\s:)]+/g, '[internal_url]');
+}
+
+/**
+ * Masks full consumer numbers (e.g. 12345678 -> ****5678) to prevent PII exposure in logs and telemetry
+ */
+function maskConsumerNumber(consumerNo) {
+    if (!consumerNo) return '';
+    const str = String(consumerNo).trim();
+    if (str.length <= 4) return '****';
+    return '****' + str.slice(-4);
+}
+
+function recordDebugLog(level, message, error = null) {
+    const timestamp = new Date().toISOString();
+    const sanitizedMsg = sanitizeErrorMessage(message);
+    let entry = `[${timestamp}] [${level}] ${sanitizedMsg}\n`;
+    if (error) {
+        const rawError = error.stack || error.message || error;
+        entry += `DETAILS: ${sanitizeErrorMessage(String(rawError))}\n`;
+    }
+    try {
+        fs.appendFileSync(debugLogFile, entry, 'utf8');
+    } catch (e) {}
+
+    // Live terminal visibility during npm start / development
+    if (level === 'ERROR') {
+        console.error(entry);
+    } else {
+        console.log(entry);
+    }
+}
 
 const WORKER_BASE_URL = 'https://bharatgas-api.www-rishikesh111.workers.dev';
 
@@ -303,16 +361,12 @@ async function launchBrowser(preferredChannel = 'chrome', options = {}) {
     const launchArgs = [
         '--start-maximized',
         '--disable-blink-features=AutomationControlled',
-        '--disable-extensions',
-        '--disable-background-networking',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
         '--disable-features=CalculateNativeWinOcclusion',
-        '--disable-component-update',
-        '--disable-sync',
-        '--no-default-browser-check',
-        '--no-first-run',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
         ...(options.args || [])
     ];
 
@@ -375,9 +429,9 @@ function sendWindowsNotification(title, message) {
  */
 async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
     const logger = typeof log === 'function' ? log : console.log;
-    const clientKey = (apiKey || inMemoryApiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '4de60f13638febd83275de5f12c956d1' || '').trim();
+    const clientKey = (apiKey || inMemoryApiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '').trim();
     if (!clientKey) {
-        throw new Error('Anti-Captcha API key is required.');
+        throw new Error('Anti-Captcha API key is required. Please provide it via Cloudflare manifest or settings.');
     }
     if (ac && typeof ac.setAPIKey === 'function') {
         try { ac.setAPIKey(clientKey); } catch (_) {}
@@ -411,14 +465,17 @@ async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
         throw new Error('Anti-Captcha failed to return a valid taskId');
     }
 
-    logger('[BOT] Polling Anti-Captcha result...');
+    logger('[SYNC] Awaiting security verification...');
     await new Promise(r => setTimeout(r, 4000));
 
     const startTime = Date.now();
     const maxTimeoutMs = 45000;
 
     while (Date.now() - startTime < maxTimeoutMs) {
-        logger('[BOT] Polling Anti-Captcha result...');
+        logger('[SYNC] Awaiting security verification...');
+        if (typeof this?.sendLog === 'function') {
+            this.sendLog('[SYNC] Awaiting security verification...');
+        }
 
         let resultData;
         try {
@@ -432,7 +489,8 @@ async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
             });
             resultData = await resultResp.json().catch(() => ({}));
         } catch (netErr) {
-            logger(`[BOT] Polling network warning: ${netErr.message}. Retrying...`);
+            recordDebugLog('WARN', 'Security verification polling network retry', netErr);
+            logger(`[SYNC] Security verification network retry...`);
         }
 
         if (resultData && resultData.errorId && resultData.errorId > 0) {
@@ -546,7 +604,6 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
 
     log('🌐 Navigating to eConnect portal...');
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3000);
 
     // Dynamic Selectors with Fallbacks for tests and runtime
     const userInputSelector = activeSelectors.loginUser || activeSelectors.userInput || activeSelectors.userIdInput || activeSelectors.login?.principalInput || '#principal';
@@ -556,23 +613,16 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
     const loginBtnSelector = activeSelectors.loginBtn || activeSelectors.loginButton || activeSelectors.login?.loginBtn || '.login-btn';
     const menuMyAppsSelector = activeSelectors.menuMyApps || 'My Application';
 
-    // Check login form vs dashboard indicator - never blindly skip login
-    let onDashboard = false;
-    let isLoginFormVisible = false;
+    // Targeted DOM element visibility check without blind timeout (#principal)
+    const loginForm = page.locator(userInputSelector);
+    const isLoginFormVisible = await loginForm.isVisible({ timeout: 4000 }).catch(() => false);
 
-    try {
-        await Promise.race([
-            page.locator(userInputSelector).waitFor({ state: 'visible', timeout: 5000 }),
-            page.locator('a').filter({ hasText: menuMyAppsSelector }).first().waitFor({ state: 'visible', timeout: 5000 })
-        ]);
-    } catch (_) {}
-
-    isLoginFormVisible = await page.locator(userInputSelector).isVisible().catch(() => false);
-    onDashboard = await page.locator('a').filter({ hasText: menuMyAppsSelector }).first().isVisible().catch(() => false);
-
-    if (onDashboard && !isLoginFormVisible) {
-        log('✅ Active session confirmed on dashboard, skipping login');
-        return;
+    if (!isLoginFormVisible) {
+        log('✅ Session valid / Active session confirmed, skipping login');
+        if (typeof this?.sendLog === 'function') {
+            this.sendLog('✅ Session valid / Active session confirmed, skipping login');
+        }
+        return true;
     }
 
     log('🔒 Session not active, performing login...');
@@ -581,6 +631,15 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
         log(`\n🔄 Login Attempt ${attempt}/3...`);
 
         try {
+            // Abort check before CAPTCHA:
+            if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || page.isClosed()) {
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog('🛑 Session stopped by operator.');
+                }
+                log('🛑 Session stopped by operator.');
+                return false;
+            }
+
             // 1. Freeze input fields immediately via page.evaluate (DO NOT fill user/pass yet)
             await page.evaluate(`
                 const userEl = document.querySelector('#principal');
@@ -596,17 +655,33 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
             `).catch(() => {});
 
             // 2. While inputs are locked, take screenshot of img#captcha and call solveAntiCaptcha()
-            log('🤖 Solving CAPTCHA using Anti-Captcha (Inputs Locked)...');
+            log('🤖 Processing portal security handshake (AI OCR Engine)...');
+            if (typeof this?.sendLog === 'function') {
+                this.sendLog('Processing portal security handshake (AI OCR Engine)...');
+            }
 
-            const captchaElement = await page.locator(captchaImgSelector);
+            const captchaElement = page.locator(captchaImgSelector);
             await captchaElement.waitFor({ state: 'visible', timeout: 10000 });
 
             const imageBuffer = await captchaElement.screenshot();
             const base64Image = imageBuffer.toString('base64');
 
-            const effectiveApiKey = apiKey || inMemoryApiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '4de60f13638febd83275de5f12c956d1';
+            const effectiveApiKey = (apiKey || inMemoryApiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '').trim();
             const captchaText = await solveAntiCaptcha(base64Image, effectiveApiKey, log);
-            log(`✅ CAPTCHA solved: ${captchaText}`);
+
+            // HARD-KILL GUARD IMMEDIATELY AFTER CAPTCHA:
+            if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || page.isClosed()) {
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog('🛑 Session stopped by operator. Cancelling login.');
+                }
+                log('🛑 Session stopped by operator. Cancelling login.');
+                return false;
+            }
+
+            log('✅ Security handshake cleared successfully.');
+            if (typeof this?.sendLog === 'function') {
+                this.sendLog('Security handshake cleared successfully.');
+            }
 
             // 3. Zero-Window Flash Fill: Temporarily remove readonly and fill authorized credentials & captcha
             await page.evaluate(`
@@ -629,24 +704,61 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
                 throw new Error("SECURITY VIOLATION: Manual Credential Tampering Detected! Aborting automation.");
             }
 
-            // 5. Click .login-btn immediately without any artificial timeout
+            // 5. Click login button immediately following integrity check
             await page.click(loginBtnSelector);
 
-            log('⏳ Waiting to verify login success...');
+            // Mandatory server handshake buffer (matches master_automation_022952.js)
+            const waitMsg = '⏳ Verifying credentials and awaiting dashboard redirect...';
+            log(waitMsg);
+            if (typeof this?.sendLog === 'function') {
+                this.sendLog(waitMsg);
+            }
             await page.waitForTimeout(5000);
+
+            // Abort check
+            if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || page.isClosed()) {
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog('🛑 Login aborted by operator.');
+                }
+                log('🛑 Login aborted by operator.');
+                return false;
+            }
 
             const stillOnLogin = await page.locator(userInputSelector).isVisible().catch(() => false);
 
             if (!stillOnLogin) {
-                log('✅ Successfully navigated to dashboard!');
-                const savePath = statePath || 'state.json';
+                const successNavMsg = '✅ Successfully navigated to dashboard!';
+                log(successNavMsg);
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog(successNavMsg);
+                }
+                const savePath = statePath || this?.stateFilePath || path.join(fallbackUserDataDir, 'state.json');
                 try {
+                    const saveDir = path.dirname(savePath);
+                    if (!fs.existsSync(saveDir)) {
+                        fs.mkdirSync(saveDir, { recursive: true });
+                    }
                     await page.context().storageState({ path: savePath });
-                    log(`💾 Session cookies successfully saved to ${savePath}`);
+                    log('💾 Session cookies successfully saved to secure storage.');
                 } catch (e) {}
-                return;
+                return true;
             } else {
-                log(`⚠️ Attempt ${attempt} failed: Incorrect CAPTCHA or server error.`);
+                recordDebugLog('WARN', `Login attempt ${attempt} unconfirmed (still on login page)`);
+                if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || page.isClosed()) {
+                    if (typeof this?.sendLog === 'function') {
+                        this.sendLog('🛑 Login aborted by operator.');
+                    }
+                    log('🛑 Login aborted by operator.');
+                    return false;
+                }
+                if (attempt === 3) {
+                    throw new Error('Portal authentication failed after 3 attempts.');
+                }
+                const retryMsg = `⚠️ Verification attempt ${attempt} unconfirmed. Retrying...`;
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog(retryMsg);
+                }
+                log(retryMsg);
                 if (attempt < 3) {
                     log('🔄 Reloading page for fresh CAPTCHA...');
                     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -654,11 +766,22 @@ async function performLogin(page, userId, password, selectorsOrOptions = null, m
                 }
             }
         } catch (error) {
-            log(`❌ Attempt ${attempt} encountered an error: ${error.message}`);
+            if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || page.isClosed()) {
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog('🛑 Login aborted by operator.');
+                }
+                log('🛑 Login aborted by operator.');
+                return false;
+            }
+            recordDebugLog('ERROR', `Login attempt ${attempt} failure`, error);
             if (error.message && error.message.includes('SECURITY VIOLATION')) {
                 throw error;
             }
-            if (attempt === 3) throw new Error('Login completely failed after 3 attempts.');
+            if (attempt === 3) throw new Error('Portal authentication failed after 3 attempts.');
+            if (typeof this?.sendLog === 'function') {
+                this.sendLog(`⚠️ Verification attempt ${attempt} unconfirmed. Retrying...`);
+            }
+            log(`⚠️ Verification attempt ${attempt} unconfirmed. Retrying...`);
         }
     }
 }
@@ -692,20 +815,48 @@ async function scrapeConsumerNumbers(page, selectors = null, log = console.log) 
 
     logger('📊 Navigating to E-Day End page to scrape numbers...');
 
-    // 1. Hover over "My Application"
-    logger(`🖱️ Hovering over "${menuMyApps}" menu...`);
-    await page.locator('a').filter({ hasText: menuMyApps }).first().hover();
-    await page.waitForTimeout(2000);
+    logger(`🖱️ Opening "${menuMyApps}" menu and navigating to "${linkLpgOne}"...`);
 
-    // 2. Click "LPG One" and wait for new tab context
-    logger(`🖱️ Clicking on "${linkLpgOne}"...`);
+    // Ensure network has settled after post-login redirect
+    await page.waitForLoadState('domcontentloaded');
+
+    // Resilient Menu Opener Loop
+    const myAppSelector = 'a:has-text("My Application"), a:has-text("MY APPLICATION")';
+    const lpgOneSelector = 'a:has-text("LPG One"), a:has-text("LPG ONE")';
+
+    let lpgOneFound = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const myAppElement = page.locator(myAppSelector).first();
+            await myAppElement.hover({ timeout: 5000 });
+            await page.waitForTimeout(600); // Allow animation to reveal dropdown
+
+            // Check if LPG One is visible
+            const lpgOneLocator = page.locator(lpgOneSelector).first();
+            if (await lpgOneLocator.isVisible()) {
+                lpgOneFound = true;
+                break;
+            } else {
+                // Fallback: Click 'My Application' to force open dropdown if hover failed
+                await myAppElement.click({ timeout: 3000 }).catch(() => {});
+                await page.waitForTimeout(600);
+                if (await lpgOneLocator.isVisible()) {
+                    lpgOneFound = true;
+                    break;
+                }
+            }
+        } catch (err) {
+            await page.waitForTimeout(1000);
+        }
+    }
+
+    // Click LPG One with popup listener using force: true to bypass any fleeting CSS occlusion
     const [page1] = await Promise.all([
-        page.context().waitForEvent('page'),
-        page.locator('a').filter({ hasText: linkLpgOne }).first().click()
+        page.context().waitForEvent('page', { timeout: 45000 }),
+        page.locator(lpgOneSelector).first().click({ force: true, timeout: 45000 })
     ]);
 
     await page1.waitForLoadState('domcontentloaded');
-    await page1.waitForTimeout(2000);
 
     // 3. In page1: Click "E-Day End This option is for" -> Click "Proceed"
     logger(`🖱️ Clicking on "${linkEDayEnd}"...`);
@@ -715,11 +866,11 @@ async function scrapeConsumerNumbers(page, selectors = null, log = console.log) 
         await page1.getByRole('link', { name: linkEDayEnd }).click();
     }
 
-    if (btnProceedDayEnd.startsWith('#') || btnProceedDayEnd.startsWith('.') || btnProceedDayEnd.includes('[')) {
-        await page1.locator(btnProceedDayEnd).first().click();
-    } else {
-        await page1.getByRole('button', { name: btnProceedDayEnd }).click();
-    }
+    const proceedBtn = (btnProceedDayEnd.startsWith('#') || btnProceedDayEnd.startsWith('.') || btnProceedDayEnd.includes('['))
+        ? page1.locator(btnProceedDayEnd).first()
+        : page1.getByRole('button', { name: btnProceedDayEnd });
+    await proceedBtn.waitFor({ state: 'visible' });
+    await proceedBtn.click();
 
     // 4. Click target link for Product 5350:
     logger(`🖱️ Opening consumer list for Product ${product5350Text} (Delivery Confirmation Not Done)...`);
@@ -727,6 +878,7 @@ async function scrapeConsumerNumbers(page, selectors = null, log = console.log) 
         .locator('#ctl00_ContentPlaceHolder1_grViewTransactionsMatch tr', { hasText: product5350Text })
         .locator(linkDelvConfNotDone)
         .first();
+    await targetLink.waitFor({ state: 'visible' });
 
     const [page2] = await Promise.all([
         page1.context().waitForEvent('page'),
@@ -734,23 +886,20 @@ async function scrapeConsumerNumbers(page, selectors = null, log = console.log) 
     ]);
 
     await page2.waitForLoadState('domcontentloaded');
-    await page2.waitForTimeout(2000);
     logger('✅ E-Day End tab opened!');
 
-    // 5. In page2: Scrape numbers from tableConsumers
-    const consumerNumbers = await page2.$$eval(tableConsumers, rows => {
-        const numbers = [];
-        for (let i = 1; i < rows.length; i++) {
-            const cells = rows[i].querySelectorAll('td');
-            if (cells.length >= 3) {
-                const num = cells[2].textContent.trim();
-                if (num) numbers.push(num);
-            }
-        }
-        return numbers;
-    });
+    // Native Node-side extraction (Zero browser code injection, zero obfuscation conflict)
+    await page2.waitForSelector('#gvProductConsumer tr', { state: 'attached', timeout: 15000 });
 
-    logger(`📋 Scraped ${consumerNumbers.length} consumer numbers.`);
+    // Direct extraction of column 3 cells across all rows
+    const rawCells = await page2.locator('#gvProductConsumer tr td:nth-child(3)').allTextContents();
+    const consumerNumbers = rawCells.map(n => n.trim()).filter(n => n.length > 0);
+
+    const scrapedSuccessMsg = `📋 Successfully synchronized ${consumerNumbers.length} consumer records.`;
+    logger(scrapedSuccessMsg);
+    if (typeof this?.sendLog === 'function') {
+        this.sendLog(`📋 Successfully synchronized ${consumerNumbers.length} consumer records.`);
+    }
     await page2.close();
     await page1.close();
     return consumerNumbers;
@@ -806,29 +955,36 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
     logger(`\n🚀 Starting Cancellation Process for ${numbers.length} numbers...`);
 
     logger(`🖱️ Hovering over "${menuMyApps}"...`);
-    await page.locator('a').filter({ hasText: menuMyApps }).first().hover();
-    await page.waitForTimeout(1000);
+    const myAppMenu = page.locator('a').filter({ hasText: menuMyApps }).first();
+    await myAppMenu.waitFor({ state: 'visible' });
+    await myAppMenu.hover();
 
     logger(`🖱️ Clicking on "${linkLpgOne}"...`);
     const [newPage] = await Promise.all([
         page.context().waitForEvent('page'),
         page.locator('a').filter({ hasText: linkLpgOne }).first().click()
     ]);
+    // Additive safeguard: Allows sub-second execution on fast response, but gives 45s headroom if BPCL lags
+    newPage.setDefaultTimeout(45000);
+    newPage.setDefaultNavigationTimeout(45000);
 
     await newPage.waitForLoadState('domcontentloaded');
-    await newPage.waitForTimeout(1000);
 
     logger(`🖱️ Clicking on "${linkCashMemoCancel}"...`);
-    if (linkCashMemoCancel.startsWith('#') || linkCashMemoCancel.startsWith('.') || linkCashMemoCancel.includes('[') || linkCashMemoCancel.includes('>') || linkCashMemoCancel.includes(':')) {
-        await newPage.locator(linkCashMemoCancel).first().click();
-    } else {
-        await newPage.locator('a').filter({ hasText: linkCashMemoCancel }).first().click();
-    }
-    await newPage.waitForLoadState('domcontentloaded');
-    await newPage.waitForTimeout(2000);
+    const cancelMenuLocator = (linkCashMemoCancel.startsWith('#') || linkCashMemoCancel.startsWith('.') || linkCashMemoCancel.includes('[') || linkCashMemoCancel.includes('>') || linkCashMemoCancel.includes(':'))
+        ? newPage.locator(linkCashMemoCancel).first()
+        : newPage.locator('a').filter({ hasText: linkCashMemoCancel }).first();
+    await cancelMenuLocator.click();
 
+    await newPage.waitForLoadState('domcontentloaded');
+    await newPage.waitForSelector(txtConsumerNumber, { state: 'visible', timeout: 15000 });
+
+    const runStartTime = Date.now();
+    const benchmarkStartTime = callbacks.startTime || runStartTime;
     let pendingNumbers = [...numbers];
+    const initialScrapedCount = pendingNumbers.length;
     const maxPasses = 2; // Pass 1 for all, Pass 2 for failed numbers
+    let totalCancelledCount = 0;
 
     const stats = {
         total: numbers.length,
@@ -851,7 +1007,7 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
     });
 
     for (let pass = 1; pass <= maxPasses; pass++) {
-        if (isStopAutomationRequested()) {
+        if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || isAborted) {
             stats.stopped = true;
             break;
         }
@@ -864,7 +1020,10 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
         let failedInThisPass = [];
 
         for (let i = 0; i < pendingNumbers.length; i++) {
-            if (isStopAutomationRequested()) {
+            if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || isAborted) {
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog('🛑 Process stopped by operator.');
+                }
                 logger('\n🛑 [System] Auto-cancellation stopped by user.');
                 stats.stopped = true;
                 break;
@@ -898,7 +1057,18 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
                     success: stats.success,
                     failed: stats.failed,
                     skipped: stats.skipped,
-                    consumerNo,
+                    consumerNo: maskConsumerNumber(consumerNo),
+                    pass
+                });
+            }
+            if (typeof this?.sendProgress === 'function') {
+                this.sendProgress({
+                    current: stats.processed,
+                    total: numbers.length,
+                    success: stats.success,
+                    failed: stats.failed,
+                    skipped: stats.skipped,
+                    consumerNo: maskConsumerNumber(consumerNo),
                     pass
                 });
             }
@@ -907,28 +1077,31 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
                 await newPage.fill(txtConsumerNumber, consumerNo);
 
                 await Promise.all([
-                    newPage.waitForLoadState('networkidle').catch(() => newPage.waitForLoadState('domcontentloaded')),
+                    newPage.waitForLoadState('networkidle'),
                     newPage.click(btnProceedCancel)
                 ]);
 
                 const cancelLink = newPage.locator(linkCancelMemo);
 
-                if (await cancelLink.isVisible().catch(() => false)) {
-                    if (isAborted || isStopAutomationRequested()) {
+                if (await cancelLink.isVisible()) {
+                    if (this?.abortController?.signal?.aborted || isAborted || isStopAutomationRequested()) {
                         logger('\n🛑 [System] Auto-cancellation stopped by user before memo cancellation click.');
                         stats.stopped = true;
                         break;
                     }
 
                     await Promise.all([
-                        newPage.waitForLoadState('networkidle').catch(() => newPage.waitForLoadState('domcontentloaded')),
+                        newPage.waitForLoadState('networkidle'),
                         cancelLink.click()
                     ]);
 
                     const msg = await newPage.textContent(lblMessage).catch(() => '');
                     if (msg && msg.includes('Successfully')) {
-                        logger(`✅ Success! Cash memo for ${consumerNo} cancelled.`);
+                        totalCancelledCount++;
                         stats.success++;
+                        const successMsg = `✅ Success! Cash memo for ${maskConsumerNumber(consumerNo)} cancelled.`;
+                        logger(successMsg);
+                        if (typeof this?.sendLog === 'function') this.sendLog(successMsg);
                         reportMap.set(consumerNo, {
                             SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
                             ConsumerNumber: consumerNo,
@@ -937,11 +1110,15 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
                             Timestamp: new Date().toISOString()
                         });
                     } else {
-                        logger(`⚠️ ${consumerNo} cancellation message unclear. Will retry.`);
+                        const unclearMsg = `⚠️ Consumer ${maskConsumerNumber(consumerNo)} cancellation message unclear. Will retry.`;
+                        logger(unclearMsg);
+                        if (typeof this?.sendLog === 'function') this.sendLog(unclearMsg);
                         failedInThisPass.push(consumerNo);
                     }
                 } else {
-                    logger(`⏭️ No cancel link found for ${consumerNo} (might already be cancelled).`);
+                    const skipMsg = `⏭️ No cancel link found for ${maskConsumerNumber(consumerNo)} (already cancelled/inactive).`;
+                    logger(skipMsg);
+                    if (typeof this?.sendLog === 'function') this.sendLog(skipMsg);
                     stats.skipped++;
                     reportMap.set(consumerNo, {
                         SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
@@ -952,25 +1129,30 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
                     });
                 }
 
-                // Clear form for next number
+                // Clear form for next iteration
                 await Promise.all([
-                    newPage.waitForLoadState('networkidle').catch(() => newPage.waitForLoadState('domcontentloaded')),
+                    newPage.waitForLoadState('networkidle'),
                     newPage.click(btnClear)
                 ]);
 
             } catch (err) {
-                logger(`❌ Error with ${consumerNo}: ${err.message}. Will retry.`);
+                recordDebugLog('ERROR', `Cancellation error for consumer ${maskConsumerNumber(consumerNo)}`, err);
+                const unclearMsg = `⚠️ Record ${maskConsumerNumber(consumerNo)} response unclear. Added to retry queue.`;
+                logger(unclearMsg);
+                if (typeof this?.sendLog === 'function') {
+                    this.sendLog(unclearMsg);
+                }
                 failedInThisPass.push(consumerNo);
                 reportMap.set(consumerNo, {
                     SNo: reportMap.get(consumerNo)?.SNo || stats.processed,
                     ConsumerNumber: consumerNo,
                     Status: 'Failed',
-                    Reason: err.message || 'Error occurred during cancellation',
+                    Reason: sanitizeErrorMessage(err.message) || 'Error occurred during cancellation',
                     Timestamp: new Date().toISOString()
                 });
                 try {
                     await newPage.click(btnClear);
-                    await newPage.waitForLoadState('networkidle').catch(() => newPage.waitForLoadState('domcontentloaded'));
+                    await newPage.waitForLoadState('networkidle');
                 } catch (e) {}
             }
 
@@ -982,7 +1164,18 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
                     success: stats.success,
                     failed: failedInThisPass.length,
                     skipped: stats.skipped,
-                    consumerNo,
+                    consumerNo: maskConsumerNumber(consumerNo),
+                    pass
+                });
+            }
+            if (typeof this?.sendProgress === 'function') {
+                this.sendProgress({
+                    current: stats.processed,
+                    total: numbers.length,
+                    success: stats.success,
+                    failed: failedInThisPass.length,
+                    skipped: stats.skipped,
+                    consumerNo: maskConsumerNumber(consumerNo),
                     pass
                 });
             }
@@ -990,18 +1183,42 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
 
         pendingNumbers = failedInThisPass;
 
-        if (isStopAutomationRequested() || stats.stopped) {
+        if (this?.abortController?.signal?.aborted || isStopAutomationRequested() || stats.stopped) {
             stats.stopped = true;
             break;
         }
 
         if (pass === maxPasses && pendingNumbers.length > 0) {
             logger(`\n🚨 Final Report: ${pendingNumbers.length} numbers could not be cancelled after retries.`);
-            logger(`Failed Numbers: ${pendingNumbers.join(', ')}`);
+            logger(`Failed Numbers: ${pendingNumbers.map(maskConsumerNumber).join(', ')}`);
         }
     }
 
     stats.failed = pendingNumbers.length;
+
+    // STOP TIMER: Immediately after Pass 1 and Pass 2 (retries) finish
+    const runEndTime = Date.now();
+    const elapsedMs = Math.max(0, runEndTime - benchmarkStartTime);
+
+    function formatDuration(ms) {
+        const totalSecs = Math.floor(ms / 1000);
+        const mins = Math.floor(totalSecs / 60);
+        const secs = totalSecs % 60;
+        return `${mins}m ${String(secs).padStart(2, '0')}s`;
+    }
+
+    const timeTakenFormatted = formatDuration(elapsedMs);
+
+    const metrics = {
+        date: new Date().toLocaleDateString('en-GB'),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        scrapedCount: initialScrapedCount,
+        cancelledCount: stats.success,
+        timeTaken: timeTakenFormatted,
+        rawDurationMs: elapsedMs,
+        timestamp: Date.now()
+    };
+    stats.metrics = metrics;
 
     // Reset process and window title back to "BPCL Automation Completed"
     try {
@@ -1014,14 +1231,32 @@ async function runCancellation(page, numbers, selectorsOrCallbacks = null, maybe
         await newPage.evaluate(`document.title = "BPCL Automation Completed"`).catch(() => {});
     } catch (e) {}
 
-    logger(`\n📊 Final Summary: Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Skipped: ${stats.skipped}`);
+    logger('\n================ BENCHMARK REPORT ================');
+    logger(`Total Scraped          : ${numbers.length}`);
+    logger(`Successfully Cancelled : ${stats.success}`);
+    logger(`Time Taken             : ${timeTakenFormatted} (${elapsedMs} ms)`);
+    logger(`Average Speed          : ${(elapsedMs / (numbers.length || 1) / 1000).toFixed(2)}s per consumer`);
+    logger('==================================================\n');
+
+    logger(`\n📊 Final Summary: Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Skipped: ${stats.skipped} | Time Taken: ${metrics.timeTaken}`);
     logger('🎉 Cancellation module completed!');
 
     // Final Windows Toast Notification with sound
     sendWindowsNotification(
         "BPCL Cash Memo Automation Completed",
-        `Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Skipped: ${stats.skipped}`
+        `Total: ${stats.total} | Success: ${stats.success} | Failed: ${stats.failed} | Time Taken: ${metrics.timeTaken}`
     );
+
+    // Trigger Liquid-Glass Toast window
+    try {
+        const { ipcRenderer } = require('electron');
+        if (ipcRenderer && typeof ipcRenderer.send === 'function' && !stats.stopped) {
+            ipcRenderer.send('show-completion-toast', {
+                totalCancelled: totalCancelledCount,
+                timeTaken: timeTakenFormatted
+            });
+        }
+    } catch (_) {}
 
     if (!newPage.isClosed()) {
         await newPage.close().catch(() => {});
@@ -1083,6 +1318,11 @@ async function runAutomation(config = {}) {
     } = callbacks;
 
     const log = typeof onLog === 'function' ? onLog : console.log;
+    const startSessionMsg = 'Initializing agency session in secure workstation mode...';
+    log(`🚀 ${startSessionMsg}`);
+    if (typeof this?.sendLog === 'function') {
+        this.sendLog(startSessionMsg);
+    }
     const effectiveUserId = (authorizedUserId || bpclUserId || config.userId || '').trim();
     const effectivePassword = (bpclPassword || config.password || '').trim();
     const effectiveAntiCaptchaKey = (config.anticaptchaApiKey || config.antiCaptchaKey || config.apiKey || '').trim();
@@ -1104,7 +1344,7 @@ async function runAutomation(config = {}) {
 
     // 1. Locate and execute the Cloudflare license verification call
     onStatus('Verifying License...');
-    log('🔐 Verifying BPCL User ID & License Key with Cloudflare Worker...');
+    log('🔐 Verifying Agency Credentials & License with Nexus Cloud Engine...');
 
     let responseData = null;
     try {
@@ -1155,7 +1395,11 @@ async function runAutomation(config = {}) {
     inMemoryLoginUrl = cloudPayload?.loginUrl || 'https://econnect.bpcl.in/selfservice/menu/SELFSERVICE_MYINFO';
 
     if (hasCloudSelectors) {
-        log('✅ License verified! Cloud manifest selectors loaded into memory.');
+        const licMsg = 'License verified! Cloud configuration synchronized.';
+        log(`✅ ${licMsg}`);
+        if (typeof this?.sendLog === 'function') {
+            this.sendLog(licMsg);
+        }
     } else {
         log('ℹ️ Remote payload not provided; seamlessly falling back to built-in local selectors.');
     }
@@ -1173,16 +1417,19 @@ async function runAutomation(config = {}) {
     if (typeof callbacks?.onBrowserLaunched === 'function') {
         callbacks.onBrowserLaunched(browser);
     }
-    const sessionDir = userDataPath || path.join(__dirname, 'bpcl_session');
+    const sessionDir = userDataPath || fallbackUserDataDir;
     const stateFile = path.join(sessionDir, 'state.json');
 
     let contextOptions = { viewport: null };
     if (fs.existsSync(stateFile)) {
         contextOptions.storageState = stateFile;
-        log('📂 Found existing session state in storage.');
+        log('📂 Found existing session state in secure storage.');
     }
 
     const context = await browser.newContext(contextOptions);
+    // Additive safeguard: Allows sub-second execution on fast response, but gives 45s headroom if BPCL lags
+    context.setDefaultTimeout(45000);
+    context.setDefaultNavigationTimeout(45000);
 
     await context.addInitScript(`
         (() => {
@@ -1210,35 +1457,111 @@ async function runAutomation(config = {}) {
     `);
 
     const page = await context.newPage();
+    // Additive safeguard: Allows sub-second execution on fast response, but gives 45s headroom if BPCL lags
+    page.setDefaultTimeout(45000);
+    page.setDefaultNavigationTimeout(45000);
 
     try {
         await injectNexusOverlay(page);
 
         // Perform login using dynamic memory selectors
-        await performLogin(page, effectiveUserId, effectivePassword, inMemorySelectors, log, stateFile, null, browser);
+        const loginResult = await performLogin.call(this, page, effectiveUserId, effectivePassword, inMemorySelectors, log, stateFile, null, browser);
+        if (loginResult === false || this?.abortController?.signal?.aborted || isStopAutomationRequested()) {
+            log('🛑 Login aborted or stopped by operator.');
+            await browser.close().catch(() => {});
+            activeBrowser = null;
+            return { success: false, stopped: true, message: 'Login aborted by operator.' };
+        }
 
         // Scrape consumer numbers using dynamic memory selectors
-        const consumerNumbers = await scrapeConsumerNumbers(page, inMemorySelectors, log);
+        const consumerNumbers = await scrapeConsumerNumbers.call(this, page, inMemorySelectors, log);
 
         if (consumerNumbers.length === 0) {
             log('ℹ️ No pending delivery confirmation records found. Everything up to date!');
             await browser.close().catch(() => {});
             activeBrowser = null;
+            const emptyMetrics = {
+                date: new Date().toLocaleDateString('en-GB'),
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                scrapedCount: 0,
+                cancelledCount: 0,
+                timeTaken: '0m 00s',
+                rawDurationMs: 0,
+                timestamp: Date.now()
+            };
             return {
                 success: true,
                 message: 'No pending records found.',
                 total: 0,
                 cancelled: 0,
-                stats: { total: 0, success: 0, failed: 0, skipped: 0 }
+                stats: { total: 0, success: 0, failed: 0, skipped: 0, metrics: emptyMetrics },
+                metrics: emptyMetrics
             };
         }
 
+        // ==========================================
+        // TIMER START: Right after scraping finishes
+        // ==========================================
+        log('\n⏱️ Starting cancellation benchmark timer...');
+        const cancellationStartTime = Date.now();
+
         // Run cancellation using dynamic memory selectors
-        const cancellationStats = await runCancellation(page, consumerNumbers, inMemorySelectors, {
+        const cancellationStats = await runCancellation.call(this, page, consumerNumbers, inMemorySelectors, {
             log,
             onProgress,
-            onTitleUpdate
+            onTitleUpdate,
+            startTime: cancellationStartTime
         });
+
+        // ==========================================
+        // TIMER STOP: After all passes/retries finish
+        // ==========================================
+        const cancellationEndTime = Date.now();
+        const elapsedMs = Math.max(0, cancellationEndTime - cancellationStartTime);
+
+        function formatDuration(ms) {
+            const totalSecs = Math.floor(ms / 1000);
+            const mins = Math.floor(totalSecs / 60);
+            const secs = totalSecs % 60;
+            return `${mins}m ${String(secs).padStart(2, '0')}s`;
+        }
+
+        const timeTakenFormatted = formatDuration(elapsedMs);
+
+        // Ensure metrics have exact formatted duration
+        cancellationStats.metrics = {
+            ...cancellationStats.metrics,
+            scrapedCount: consumerNumbers.length,
+            cancelledCount: cancellationStats.success,
+            timeTaken: timeTakenFormatted,
+            rawDurationMs: elapsedMs,
+            timestamp: cancellationEndTime
+        };
+
+        const totalCancelledCount = cancellationStats.success || 0;
+        const formattedDuration = timeTakenFormatted;
+
+        // Send the completion event to trigger the Liquid-Glass Toast window:
+        try {
+            const { ipcRenderer } = require('electron');
+            if (ipcRenderer && typeof ipcRenderer.send === 'function' && !cancellationStats.stopped) {
+                ipcRenderer.send('show-completion-toast', {
+                    totalCancelled: totalCancelledCount,
+                    timeTaken: formattedDuration
+                });
+            }
+        } catch (_) {}
+
+        if (typeof callbacks?.onCompleted === 'function') {
+            callbacks.onCompleted({
+                total: consumerNumbers.length,
+                cancelled: totalCancelledCount,
+                stats: cancellationStats,
+                metrics: cancellationStats.metrics,
+                totalCancelled: totalCancelledCount,
+                timeTaken: formattedDuration
+            });
+        }
 
         await browser.close().catch(() => {});
         activeBrowser = null;
@@ -1246,7 +1569,8 @@ async function runAutomation(config = {}) {
             success: true,
             total: consumerNumbers.length,
             cancelled: cancellationStats.success,
-            stats: cancellationStats
+            stats: cancellationStats,
+            metrics: cancellationStats.metrics
         };
 
     } catch (err) {
@@ -1303,6 +1627,39 @@ function formatConsoleLog(msg) {
     return msg.replace(/[^\x00-\x7F]/g, '').trim();
 }
 
+/**
+ * Cleanup helper to safely close browser and free RAM
+ */
+async function cleanup() {
+    try {
+        if (this && this.browser) {
+            await this.browser.close().catch(() => {});
+            this.browser = null;
+        } else if (activeBrowser) {
+            await activeBrowser.close().catch(() => {});
+            activeBrowser = null;
+        }
+    } catch (e) {}
+}
+
+/**
+ * Runner class with cleanup capability to terminate orphaned browser processes
+ */
+class BelaNexusRunner {
+    constructor(browserInstance = activeBrowser) {
+        this.browser = browserInstance;
+    }
+
+    async cleanup() {
+        try {
+            if (this.browser) {
+                await this.browser.close().catch(() => {});
+                this.browser = null;
+            }
+        } catch (e) {}
+    }
+}
+
 module.exports = {
     startCancellationProcess,
     runBelaNexusAutomation,
@@ -1329,10 +1686,33 @@ module.exports = {
     solveAntiCaptcha,
     sendWindowsNotification,
     openMyApplicationsMenu,
-    formatConsoleLog
+    formatConsoleLog,
+    recordDebugLog,
+    maskConsumerNumber,
+    sanitizeErrorMessage,
+    debugLogFile,
+    logDirectory,
+    cleanup,
+    BelaNexusRunner,
+    Runner: BelaNexusRunner,
+    async cleanup() {
+        try {
+            if (this.browser) {
+                await this.browser.close().catch(() => {});
+                this.browser = null;
+            }
+        } catch (e) {}
+    }
 };
 
 Object.defineProperty(module.exports, 'activeBrowser', {
+    get() { return activeBrowser; },
+    set(b) { activeBrowser = b; },
+    enumerable: true,
+    configurable: true
+});
+
+Object.defineProperty(module.exports, 'browser', {
     get() { return activeBrowser; },
     set(b) { activeBrowser = b; },
     enumerable: true,
@@ -1345,3 +1725,4 @@ Object.defineProperty(module.exports, 'isAborted', {
     enumerable: true,
     configurable: true
 });
+

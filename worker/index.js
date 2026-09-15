@@ -9,6 +9,19 @@ const DEFAULT_ANTICAPTCHA_KEY = '4de60f13638febd83275de5f12c956d1';
 // In-memory KV fallback for development/local testing
 const memoryStore = new Map();
 
+// Global Telemetry Logs - in-memory and synced with KV (up to 200 records)
+let GLOBAL_TELEMETRY_LOGS = [];
+
+async function getGlobalTelemetryLogs(kv) {
+  if (!GLOBAL_TELEMETRY_LOGS || GLOBAL_TELEMETRY_LOGS.length === 0) {
+    const stored = await kv.get('global_telemetry_logs', 'json');
+    if (Array.isArray(stored)) {
+      GLOBAL_TELEMETRY_LOGS = stored;
+    }
+  }
+  return GLOBAL_TELEMETRY_LOGS;
+}
+
 const kvHelper = (env) => {
   const kv = env?.NEXUS_DATA;
   return {
@@ -264,6 +277,8 @@ export default {
           return new Date(b.lastUpdated || 0).getTime() - new Date(a.lastUpdated || 0).getTime();
         });
 
+        const telemetryLogs = await getGlobalTelemetryLogs(kv);
+
         return jsonResponse({
           success: true,
           today,
@@ -275,7 +290,8 @@ export default {
             totalUnreadMessages: totalUnreadSupportMessages
           },
           agencies: telemetryList,
-          announcements
+          announcements,
+          telemetryLogs
         });
       }
 
@@ -396,20 +412,53 @@ export default {
     if (path === '/api/telemetry' && method === 'POST') {
       try {
         const body = await request.json();
-        const { licenseKey, count = 0, agencyName } = body;
+        const {
+          licenseKey,
+          agencyName,
+          scrapedCount = 0,
+          cancelledCount = 0,
+          timeTaken = '',
+          date = '',
+          time = '',
+          count = 0
+        } = body;
         if (!licenseKey) {
           return jsonResponse({ success: false, message: 'licenseKey required' }, 400);
         }
 
         const cleanKey = licenseKey.trim();
-        const today = getTodayString();
-        const resolvedName = agencyName || resolveAgencyName(cleanKey);
-        const timestamp = new Date().toISOString();
+        const resolvedName = (agencyName || resolveAgencyName(cleanKey) || 'Unknown Agency').trim();
+        const effectiveCancelled = Number(cancelledCount) || Number(count) || 0;
+        const effectiveScraped = Number(scrapedCount) || effectiveCancelled;
+        const formattedDate = String(date || new Date().toLocaleDateString('en-GB')).trim();
+        const formattedTime = String(time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })).trim();
+        const formattedTimeTaken = String(timeTaken || '0 मिनट 0 सेकंड').trim();
 
-        // 1. Update daily telemetry: telemetry:<licenseKey>:<YYYY-MM-DD>
+        // 1. Maintain in-memory / KV Telemetry Logs (limit to last 200 records)
+        await getGlobalTelemetryLogs(kv);
+        const logEntry = {
+          licenseKey: cleanKey,
+          agencyName: resolvedName,
+          scrapedCount: effectiveScraped,
+          cancelledCount: effectiveCancelled,
+          timeTaken: formattedTimeTaken,
+          date: formattedDate,
+          time: formattedTime,
+          timestamp: Date.now()
+        };
+
+        GLOBAL_TELEMETRY_LOGS.unshift(logEntry);
+        if (GLOBAL_TELEMETRY_LOGS.length > 200) {
+          GLOBAL_TELEMETRY_LOGS = GLOBAL_TELEMETRY_LOGS.slice(0, 200);
+        }
+        await kv.put('global_telemetry_logs', GLOBAL_TELEMETRY_LOGS);
+
+        // 2. Update daily telemetry: telemetry:<licenseKey>:<YYYY-MM-DD>
+        const today = getTodayString();
+        const timestamp = new Date().toISOString();
         const teleKey = `telemetry:${cleanKey}:${today}`;
         const prev = (await kv.get(teleKey, 'json')) || { count: 0 };
-        const newCount = Math.max(Number(prev.count) || 0, Number(count) || 0);
+        const newCount = Math.max(Number(prev.count) || 0, effectiveCancelled);
 
         const teleData = {
           licenseKey: cleanKey,
@@ -419,7 +468,7 @@ export default {
         };
         await kv.put(teleKey, teleData);
 
-        // 2. Update agency registry list
+        // 3. Update agency registry list
         let registry = (await kv.get('agency_registry', 'json')) || [];
         const idx = registry.findIndex(item => item.licenseKey === cleanKey);
         if (idx >= 0) {
@@ -434,7 +483,7 @@ export default {
         }
         await kv.put('agency_registry', registry);
 
-        return jsonResponse({ success: true, message: 'Telemetry recorded', data: teleData });
+        return jsonResponse({ success: true, message: 'Telemetry recorded', data: logEntry }, 200);
       } catch (e) {
         return jsonResponse({ success: false, message: e.message }, 500);
       }
@@ -1561,6 +1610,32 @@ function renderAdminPortalHtml(env) {
           </tbody>
         </table>
       </div>
+
+      <!-- LIVE DISTRIBUTOR HISTORY SECTION -->
+      <div style="margin-top: 32px; border-top: 1px solid var(--card-border); padding-top: 24px;">
+        <div class="panel-header" style="margin-bottom: 14px;">
+          <div class="panel-title">⏱️ एजेंसी कैन्सिलेशन हिस्ट्री (Live Distributor History)</div>
+          <span id="telemetryHistoryCountBadge" class="status-pill" style="font-size: 11px;">0 Runs Recorded</span>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>एजेंसी का नाम (Agency Name)</th>
+                <th>तारीख एवं समय (Date & Time)</th>
+                <th>स्क्रैप / कैंसिल (Scraped / Cancelled)</th>
+                <th>लगा समय (Time Taken)</th>
+              </tr>
+            </thead>
+            <tbody id="telemetryHistoryTableBody">
+              <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 36px;">Loading live execution history...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- TAB 2: Support Inbox & Live Reply -->
@@ -1811,6 +1886,7 @@ function renderAdminPortalHtml(env) {
         currentAnnouncements = data.announcements || [];
 
         renderAgenciesTable(currentAgencies);
+        renderTelemetryHistoryTable(data.telemetryLogs || []);
         renderInboxSidebar(currentAgencies);
         renderAnnouncementsList(currentAnnouncements);
 
@@ -1859,6 +1935,55 @@ function renderAdminPortalHtml(env) {
               <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="openAgencyChat('\${escapeHtml(ag.licenseKey)}')">
                 💬 Open Chat \${ag.unreadCount > 0 ? \`(\${ag.unreadCount})\` : ''}
               </button>
+            </td>
+          </tr>
+        \`;
+      }).join('');
+    }
+
+    // Render Live Distributor History Table
+    function renderTelemetryHistoryTable(logs) {
+      const tbody = document.getElementById('telemetryHistoryTableBody');
+      const badge = document.getElementById('telemetryHistoryCountBadge');
+      if (badge) {
+        badge.textContent = (logs ? logs.length : 0) + ' Runs Recorded';
+      }
+      if (!tbody) return;
+      if (!logs || logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 36px;">No execution history logs recorded yet. Live runs will appear here automatically.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = logs.map(l => {
+        const agencyName = l.agencyName || 'Unknown Agency';
+        const licenseKey = l.licenseKey || '';
+        const dateStr = l.date || '';
+        const timeStr = l.time || '';
+        const scraped = Number(l.scrapedCount) || 0;
+        const cancelled = Number(l.cancelledCount) || 0;
+        const timeTaken = l.timeTaken || '0 मिनट 0 सेकंड';
+
+        return \`
+          <tr>
+            <td>
+              <div class="agency-cell">
+                <span class="agency-name">\${escapeHtml(agencyName)}</span>
+                <span class="agency-key">\${escapeHtml(licenseKey)}</span>
+              </div>
+            </td>
+            <td>
+              <div style="font-weight: 600; color: #f8fafc;">\${escapeHtml(dateStr)}</div>
+              <div style="font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">\${escapeHtml(timeStr)}</div>
+            </td>
+            <td>
+              <span class="count-badge" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25);">
+                \${scraped} Scraped / \${cancelled} Cancelled
+              </span>
+            </td>
+            <td>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--emerald);">
+                ⏱️ \${escapeHtml(timeTaken)}
+              </span>
             </td>
           </tr>
         \`;

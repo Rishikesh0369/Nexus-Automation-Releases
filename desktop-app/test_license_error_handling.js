@@ -241,8 +241,8 @@ async function runTests() {
             const serverDate = expiryDate || '';
             const formattedDate = mockFormatExpiryDate(serverDate);
             const detailText = formattedDate
-                ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formattedDate})`
-                : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
+                ? `🔴 License has expired (Expired on: ${formattedDate})`
+                : `🔴 License has expired (Subscription Expired)`;
 
             elements.banner.innerText = serverMessage;
             elements.expiryBannerMessage.textContent = serverMessage;
@@ -278,7 +278,7 @@ async function runTests() {
         );
         assert.strictEqual(
             elements.statusDetailText.textContent,
-            '🔴 लाइसेंस समाप्त हो गया है (Expired on: 07 Jun 2026)',
+            '🔴 License has expired (Expired on: 07 Jun 2026)',
             'Dashboard status detail must display formatted banner text'
         );
         assert.strictEqual(
@@ -361,25 +361,25 @@ async function runTests() {
         const formatted1 = formatExpiryDate('2026-06-07');
         assert.strictEqual(formatted1, '07 Jun 2026');
         const banner1 = formatted1
-            ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formatted1})`
-            : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
-        assert.strictEqual(banner1, '🔴 लाइसेंस समाप्त हो गया है (Expired on: 07 Jun 2026)');
+            ? `🔴 License has expired (Expired on: ${formatted1})`
+            : `🔴 License has expired (Subscription Expired)`;
+        assert.strictEqual(banner1, '🔴 License has expired (Expired on: 07 Jun 2026)');
 
         // Test with custom server date: 2026-12-07
         const formatted2 = formatExpiryDate('2026-12-07');
         assert.strictEqual(formatted2, '07 Dec 2026');
         const banner2 = formatted2
-            ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formatted2})`
-            : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
-        assert.strictEqual(banner2, '🔴 लाइसेंस समाप्त हो गया है (Expired on: 07 Dec 2026)');
+            ? `🔴 License has expired (Expired on: ${formatted2})`
+            : `🔴 License has expired (Subscription Expired)`;
+        assert.strictEqual(banner2, '🔴 License has expired (Expired on: 07 Dec 2026)');
 
         // Test with no date returned by server
         const formattedNone = formatExpiryDate(undefined);
         assert.strictEqual(formattedNone, null);
         const bannerNone = formattedNone
-            ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formattedNone})`
-            : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
-        assert.strictEqual(bannerNone, '🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)');
+            ? `🔴 License has expired (Expired on: ${formattedNone})`
+            : `🔴 License has expired (Subscription Expired)`;
+        assert.strictEqual(bannerNone, '🔴 License has expired (Subscription Expired)');
     });
 
     it('extracts date from error.response?.data?.expiresAt or (await error.response?.json?.())?.expiresAt', async () => {
@@ -456,7 +456,7 @@ async function runTests() {
     it('renderer.js updates top header banner directly with serverMessage, currentStateText, and warningBox dynamically', () => {
         const rendererContent = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
         assert(rendererContent.includes('banner.innerText = serverMessage'), 'Must set banner.innerText directly with serverMessage');
-        assert(rendererContent.includes('currentStateText.innerText = formattedExp ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formattedExp})` : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`'), 'Must set currentStateText.innerText');
+        assert(rendererContent.includes('currentStateText.innerText = formattedExp ? `🔴 License has expired (Expired on: ${formattedExp})` : `🔴 License has expired (Subscription Expired)`'), 'Must set currentStateText.innerText');
         assert(rendererContent.includes('warningBox.innerText = formattedExp'), 'Must set warningBox.innerText dynamically');
     });
 
@@ -465,10 +465,10 @@ async function runTests() {
         const formattedExpLive = expDateLive ? new Date(expDateLive).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
         assert.strictEqual(formattedExpLive, '07 Aug 2026');
 
-        const currentStateTextLive = formattedExpLive ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formattedExpLive})` : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
+        const currentStateTextLive = formattedExpLive ? `🔴 License has expired (Expired on: ${formattedExpLive})` : `🔴 License has expired (Subscription Expired)`;
         const warningBoxLive = formattedExpLive ? `⚠️ Subscription Expired on ${formattedExpLive}: Automation is paused. Please renew license.` : `⚠️ Subscription Expired: Automation is paused. Please renew license.`;
 
-        assert.strictEqual(currentStateTextLive, '🔴 लाइसेंस समाप्त हो गया है (Expired on: 07 Aug 2026)');
+        assert.strictEqual(currentStateTextLive, '🔴 License has expired (Expired on: 07 Aug 2026)');
         assert.strictEqual(warningBoxLive, '⚠️ Subscription Expired on 07 Aug 2026: Automation is paused. Please renew license.');
 
         // Missing date simulation
@@ -476,10 +476,10 @@ async function runTests() {
         const formattedExpNone = expDateNone ? new Date(expDateNone).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
         assert.strictEqual(formattedExpNone, '');
 
-        const currentStateTextNone = formattedExpNone ? `🔴 लाइसेंस समाप्त हो गया है (Expired on: ${formattedExpNone})` : `🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)`;
+        const currentStateTextNone = formattedExpNone ? `🔴 License has expired (Expired on: ${formattedExpNone})` : `🔴 License has expired (Subscription Expired)`;
         const warningBoxNone = formattedExpNone ? `⚠️ Subscription Expired on ${formattedExpNone}: Automation is paused. Please renew license.` : `⚠️ Subscription Expired: Automation is paused. Please renew license.`;
 
-        assert.strictEqual(currentStateTextNone, '🔴 लाइसेंस समाप्त हो गया है (Subscription Expired)');
+        assert.strictEqual(currentStateTextNone, '🔴 License has expired (Subscription Expired)');
         assert.strictEqual(warningBoxNone, '⚠️ Subscription Expired: Automation is paused. Please renew license.');
     });
 

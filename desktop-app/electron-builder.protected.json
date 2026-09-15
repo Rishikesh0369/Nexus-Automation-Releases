@@ -1,0 +1,52 @@
+{
+  "appId": "com.nexus.automation",
+  "productName": "Nexus Automation",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "preload.js",
+    "bela_nexus_runner.js",
+    "index.html",
+    "toast.html",
+    "styles.css",
+    "package.json",
+    "assets/**/*",
+    { "from": "build-obfuscated", "to": ".", "filter": ["main.js", "renderer.js", "scrapers/**/*"] },
+    "!**/*.bak",
+    "!**/*.log",
+    "!nexus_logs/**/*",
+    "!.env*",
+    "!electron-builder.env*",
+    "!electron-builder.protected.json",
+    "!test_*",
+    "!obfuscate.js",
+    "!build_protected.js",
+    "!archive_build.js",
+    "!automationRunner.js",
+    "!eng.traineddata"
+  ],
+  "extraResources": [
+    {
+      "from": "assets",
+      "to": "assets"
+    }
+  ],
+  "publish": {
+    "provider": "github",
+    "owner": "Rishikesh0369",
+    "repo": "Nexus-Automation-Releases"
+  },
+  "win": {
+    "target": [
+      "nsis"
+    ],
+    "icon": "assets/icon.ico",
+    "artifactName": "Nexus-Automation-Setup-${version}.${ext}"
+  },
+  "nsis": {
+    "oneClick": true,
+    "allowToChangeInstallationDirectory": false,
+    "artifactName": "Nexus-Automation-Setup-${version}.${ext}"
+  }
+}

@@ -14,7 +14,7 @@ const ac = require('@antiadmin/anticaptchaofficial');
  */
 async function solveAntiCaptcha(base64Image, apiKey, log = console.log) {
     const logger = typeof log === 'function' ? log : console.log;
-    const clientKey = (apiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '4de60f13638febd83275de5f12c956d1' || '').trim();
+    const clientKey = (apiKey || (ac && ac.settings && ac.settings.clientKey) || process.env.ANTI_CAPTCHA_KEY || '').trim();
     if (!clientKey) {
         throw new Error('Anti-Captcha API key is required.');
     }
@@ -1122,6 +1122,10 @@ async function launchBrowser(preferredChannel = 'chrome', options = {}) {
         '--disable-background-networking',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=CalculateNativeWinOcclusion',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
         '--disable-component-update',
         '--disable-sync',
         '--no-default-browser-check',
@@ -1291,7 +1295,7 @@ async function runAutomation(options) {
 
     // 3. Initialize Anti-Captcha securely from server manifest response (with built-in fallback)
     const manifest = verifyResult?.manifest || {};
-    const anticaptchaApiKey = manifest.anticaptchaApiKey || verifyResult?.anticaptchaApiKey || manifest.anticaptchaKey || process.env.ANTI_CAPTCHA_KEY || '4de60f13638febd83275de5f12c956d1';
+    const anticaptchaApiKey = manifest.anticaptchaApiKey || verifyResult?.anticaptchaApiKey || manifest.anticaptchaKey || process.env.ANTI_CAPTCHA_KEY || '';
 
     if (anticaptchaApiKey && anticaptchaApiKey.trim()) {
         ac.setAPIKey(anticaptchaApiKey.trim());
@@ -1311,6 +1315,8 @@ async function runAutomation(options) {
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
         '--disable-features=CalculateNativeWinOcclusion',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
         '--disable-component-update',
         '--disable-sync',
         '--no-default-browser-check',

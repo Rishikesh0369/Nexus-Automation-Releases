@@ -11,3 +11,5 @@ bpcl_profile/
 bpcl-profile/
 *.png
 *.log
+build-obfuscated/
+desktop-app/build-obfuscated/
